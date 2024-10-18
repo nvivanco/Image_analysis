@@ -144,7 +144,7 @@ def extract_mm_channels(path_to_tcyx_FOVs, chan_w=10, chan_sep=45, crop_wp=10, c
 		image_rows = first_phase_image.shape[0]
 		image_cols = first_phase_image.shape[1]
 		print("channels identified in FOV " + position)
-		consensus_mask, mask_corners_dict = make_consensus_mask(first_phase_image, chnl_loc_dict, image_rows,
+		consensus_mask, mask_corners_dict = make_consensus_mask(chnl_loc_dict, image_rows,
 																image_cols, crop_wp, chan_lp)
 		masked_image = first_phase_image * consensus_mask
 		# Convert to RGB
@@ -179,6 +179,8 @@ def extract_mm_channels(path_to_tcyx_FOVs, chan_w=10, chan_sep=45, crop_wp=10, c
 			filename = f'FOV{position}_region_{trench}.tif'
 			path = os.path.join(path_to_mm_channels, filename)
 			tifffile.imwrite(path, trench_region)
+
+	return path_to_mm_channels
 
 
 def make_consensus_mask(chnl_loc_dict, image_rows, image_cols, crop_wp=10, chan_lp=10):
@@ -333,44 +335,68 @@ def crop_around_central_flow(h_lines, w, h, growth_channel_length= 150):
         print('Warning: horizontal lines were not detected')
         return None
 
-def rotate_stack(path_to_stack, c = 0, growth_channel_length = 295):
-    """Args:
-    path_to_stack: Path to stack of cyx format files, in string format
-    c: Phase channel index in integer format, default = 0
-    orientation: Orientation of lines to use to rotate and crop files,
-    value is a string indicating "horizontal" or "vertical". Defualt is vertical.
-    growth_channel_length: length in pixels of growth channel.
-    Shorter channels are approx 130 pixels. 150 is default.
+def rotate_stack(path_to_stack, c=0, growth_channel_length=295):
+    """Rotates and crops a stack of cyx or tcyx format files.
+
+    Args:
+        path_to_stack: Path to the stack of files in string format.
+        c: Phase channel index (integer, default=0).
+        growth_channel_length: Length in pixels of the growth channel (integer, default=295).
+            Shorter channels are assumed to be around 130 pixels.
+
+    Returns:
+        path_to_rotated_images: Path to the directory containing the rotated files (string).
+
     """
-    ## I want to make this work in tcyx files, because I can skip unstacking the drift corrected files if I isolate trenches with my own code and don't use napari-mm3
-    #create an output directory for the rotated files
+
+
+
+    # Create output directory for rotated files
     path_to_rotated_images = os.path.join(path_to_stack, 'rotated')
     os.makedirs(path_to_rotated_images, exist_ok=True)
+
+    # Group files by timepoint (assuming a function named org_by_timepoint exists)
+    file_groups = org_by_timepoint([path_to_stack])
 
     for position in file_groups.keys():
         file_path = file_groups[position]['hyperstacked']['stacked']
         filename = os.path.basename(file_path)
         stacked_img = tifffile.imread(file_path)
-        ref_phase_img  = stacked_img[0, c, :, :] # [t, c, y, x]
-        print('Lines identified in FOV ' + position)
+        ref_phase_img = stacked_img[0, c, :, :]  # Assuming phase data is in the first frame
+
+        # Find lines in the reference phase image (assuming id_lines exists)
         h, w = ref_phase_img.shape
         horizontal_lines, vertical_lines = id_lines(ref_phase_img)
-        plot_lines(ref_phase_img, horizontal_lines)
-        rotation_angle = calculate_rotation_angle(ref_phase_img, horizontal_lines)
+
+        # Calculate rotation angle (assuming calculate_rotation_angle exists)
+        rotation_angle = calculate_rotation_angle(horizontal_lines)
+
+        # Apply image rotation (assuming apply_image_rotation exists)
         ref_rotated_image = apply_image_rotation(ref_phase_img, rotation_angle)
+
+        # Identify lines in the rotated image (assuming id_lines exists)
         rot_horizontal_lines, rot_vertical_lines = id_lines(ref_rotated_image)
+
+        # Crop around the central flow (assuming crop_around_central_flow exists)
         crop_start, crop_end = crop_around_central_flow(rot_horizontal_lines, w, h, growth_channel_length)
+
+        # Rotate and crop the entire stack
         rotated_stack = apply_image_rotation(stacked_img, rotation_angle)
-        cropped_stack = rotated_stack[:,:, crop_start:crop_end, :]
+        cropped_stack = rotated_stack[:, :, crop_start:crop_end, :]
+
+        # Visualize the cropped stack (optional)
         plt.figure()
         plt.imshow(cropped_stack[0, c, :, :], cmap='gray')
         plt.show()
-        print(filename)
+
+        # Save the rotated and cropped stack
         new_filename = f'rotated_{filename}'
         new_path = os.path.join(path_to_rotated_images, new_filename)
         tifffile.imwrite(new_path, cropped_stack)
+
     print('Successfully rotated stack')
     return path_to_rotated_images
+
 
 def detect_clear_image(image):
     laplacian_image = filters.laplace(image)
