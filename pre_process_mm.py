@@ -156,6 +156,8 @@ def extract_mm_channels(path_to_tcyx_FOVs, chan_w=10, chan_sep=45, crop_wp=10, c
 		# Convert the masked image to PIL format for text overlay
 		pil_image = Image.fromarray(scaled_img)
 		draw = ImageDraw.Draw(pil_image)
+		fov_text = position
+		draw.text((0, 0), text= fov_text, font=font, fill='red')
 
 		for mm_channel in mask_corners_dict.keys():
 			ch_text = mm_channel.astype(str)
@@ -163,11 +165,12 @@ def extract_mm_channels(path_to_tcyx_FOVs, chan_w=10, chan_sep=45, crop_wp=10, c
 			y = mask_corners_dict[mm_channel][1]
 			draw.text((x, y), text=ch_text, font=font, fill='red')
 		final_image = np.array(pil_image)
-
+		plt.figure()
 		plt.imshow(final_image)
 		plt.title('Channels Identified')
 		plt.axis('off')  # Hide axis labels
-		plt.show()
+		plt.draw()
+
 		filename = f'FOV{position}_mm_channel_mask.tif'
 		path = os.path.join(path_to_mm_channels, filename)
 		tifffile.imwrite(path, masked_image)
@@ -179,6 +182,7 @@ def extract_mm_channels(path_to_tcyx_FOVs, chan_w=10, chan_sep=45, crop_wp=10, c
 			filename = f'FOV{position}_region_{trench}.tif'
 			path = os.path.join(path_to_mm_channels, filename)
 			tifffile.imwrite(path, trench_region)
+	plt.show()
 
 	return path_to_mm_channels
 
@@ -186,6 +190,7 @@ def extract_mm_channels(path_to_tcyx_FOVs, chan_w=10, chan_sep=45, crop_wp=10, c
 def make_consensus_mask(chnl_loc_dict, image_rows, image_cols, crop_wp=10, chan_lp=10):
 	"""
 	Generate consensus channel mask for a given fov.
+	Adapted from napari-mm3.
 
 	Parameters
 	----------
@@ -228,7 +233,9 @@ def make_consensus_mask(chnl_loc_dict, image_rows, image_cols, crop_wp=10, chan_
 	return consensus_mask, mask_corners_dict
 
 def find_channel_locs(image_data, chan_w = 10, chan_sep = 45,  crop_wp= 10, chan_snr = 1):
-    """Finds the location of channels from a phase contrast image. The channels are returned in
+    """
+    Adapted from napari-mm3.
+    Finds the location of channels from a phase contrast image. The channels are returned in
     a dictionary where the key is the x position of the channel in pixel and the value is a
     dicionary with the open and closed end in pixels in y.
 
@@ -336,67 +343,80 @@ def crop_around_central_flow(h_lines, w, h, growth_channel_length= 150):
         return None
 
 def rotate_stack(path_to_stack, c=0, growth_channel_length=295):
-    """Rotates and crops a stack of cyx or tcyx format files.
+	"""Rotates and crops a stack of cyx or tcyx format files.
 
-    Args:
-        path_to_stack: Path to the stack of files in string format.
-        c: Phase channel index (integer, default=0).
-        growth_channel_length: Length in pixels of the growth channel (integer, default=295).
-            Shorter channels are assumed to be around 130 pixels.
+	Args:
+		path_to_stack: Path to the stack of files in string format.
+		c: Phase channel index (integer, default=0).
+		growth_channel_length: Length in pixels of the growth channel (integer, default=295).
+			Shorter channels are assumed to be around 130 pixels.
 
-    Returns:
-        path_to_rotated_images: Path to the directory containing the rotated files (string).
+	Returns:
+		path_to_rotated_images: Path to the directory containing the rotated files (string).
 
-    """
+	"""
+
+	# Create output directory for rotated files
+	font = ImageFont.truetype('/System/Library/Fonts/ArialHB.ttc', 15)
+
+	path_to_rotated_images = os.path.join(path_to_stack, 'rotated')
+	os.makedirs(path_to_rotated_images, exist_ok=True)
+
+	# Group files by timepoint
+	file_groups = org_by_timepoint([path_to_stack])
+
+	for position in file_groups.keys():
+		file_path = file_groups[position]['hyperstacked']['stacked']
+		filename = os.path.basename(file_path)
+		stacked_img = tifffile.imread(file_path)
+		ref_phase_img = stacked_img[0, c, :, :]  # Assuming phase data is in the first frame
+
+		# Find lines in the reference phase image
+		h, w = ref_phase_img.shape
+		horizontal_lines, vertical_lines = id_lines(ref_phase_img)
+
+		# Calculate rotation angle
+		rotation_angle = calculate_rotation_angle(horizontal_lines)
+
+		# Apply image rotation
+		ref_rotated_image = apply_image_rotation(ref_phase_img, rotation_angle)
+
+		# Identify lines in the rotated image
+		rot_horizontal_lines, rot_vertical_lines = id_lines(ref_rotated_image)
+
+		# Crop around the central flow
+		crop_start, crop_end = crop_around_central_flow(rot_horizontal_lines, w, h, growth_channel_length)
+
+		# Rotate and crop the entire stack
+		rotated_stack = apply_image_rotation(stacked_img, rotation_angle)
+		cropped_stack = rotated_stack[:, :, crop_start:crop_end, :]
+
+		# Visualize the cropped stack (optional)
+		rgb_img = color.gray2rgb(cropped_stack[0, c, :, :], channel_axis=-1)
+		# Convert 32 to 8 bit for PIL
+		scaling_factor = 255 / (np.max(rgb_img) - np.min(rgb_img))
+		scaled_img = (rgb_img - np.min(rgb_img)) * scaling_factor
+		scaled_img = scaled_img.astype(np.uint8)
+		# Convert the masked image to PIL format for text overlay
+		pil_image = Image.fromarray(scaled_img)
+		draw = ImageDraw.Draw(pil_image)
+		fov_text = position
+		draw.text((0, 0), text= fov_text, font=font, fill='red')
+		final_image = np.array(pil_image)
+		plt.figure()
+		plt.imshow(final_image, cmap='gray')
+		plt.axis('off')  # Hide axes labels and ticks
+		plt.draw()# Show the plot
 
 
+		# Save the rotated and cropped stack
+		new_filename = f'rotated_{filename}'
+		new_path = os.path.join(path_to_rotated_images, new_filename)
+		tifffile.imwrite(new_path, cropped_stack)
 
-    # Create output directory for rotated files
-    path_to_rotated_images = os.path.join(path_to_stack, 'rotated')
-    os.makedirs(path_to_rotated_images, exist_ok=True)
-
-    # Group files by timepoint (assuming a function named org_by_timepoint exists)
-    file_groups = org_by_timepoint([path_to_stack])
-
-    for position in file_groups.keys():
-        file_path = file_groups[position]['hyperstacked']['stacked']
-        filename = os.path.basename(file_path)
-        stacked_img = tifffile.imread(file_path)
-        ref_phase_img = stacked_img[0, c, :, :]  # Assuming phase data is in the first frame
-
-        # Find lines in the reference phase image (assuming id_lines exists)
-        h, w = ref_phase_img.shape
-        horizontal_lines, vertical_lines = id_lines(ref_phase_img)
-
-        # Calculate rotation angle (assuming calculate_rotation_angle exists)
-        rotation_angle = calculate_rotation_angle(horizontal_lines)
-
-        # Apply image rotation (assuming apply_image_rotation exists)
-        ref_rotated_image = apply_image_rotation(ref_phase_img, rotation_angle)
-
-        # Identify lines in the rotated image (assuming id_lines exists)
-        rot_horizontal_lines, rot_vertical_lines = id_lines(ref_rotated_image)
-
-        # Crop around the central flow (assuming crop_around_central_flow exists)
-        crop_start, crop_end = crop_around_central_flow(rot_horizontal_lines, w, h, growth_channel_length)
-
-        # Rotate and crop the entire stack
-        rotated_stack = apply_image_rotation(stacked_img, rotation_angle)
-        cropped_stack = rotated_stack[:, :, crop_start:crop_end, :]
-
-        # Visualize the cropped stack (optional)
-        plt.figure()
-        plt.imshow(cropped_stack[0, c, :, :], cmap='gray')
-        plt.show()
-
-        # Save the rotated and cropped stack
-        new_filename = f'rotated_{filename}'
-        new_path = os.path.join(path_to_rotated_images, new_filename)
-        tifffile.imwrite(new_path, cropped_stack)
-
-    print('Successfully rotated stack')
-    return path_to_rotated_images
-
+	plt.show()
+	print('Successfully rotated stack')
+	return path_to_rotated_images
 
 def detect_clear_image(image):
     laplacian_image = filters.laplace(image)
@@ -649,7 +669,9 @@ def plot_lines(original_img, lines):
 		for line in lines:
 			x1, y1, x2, y2 = line[0]
 			plt.plot([x1, x2], [y1, y2], color='green', linewidth=2)
-		plt.show()
+		plt.axis('off')
+		plt.draw()
+	plt.show()
 
 
 def apply_image_rotation(image_stack, rotation_angle):
