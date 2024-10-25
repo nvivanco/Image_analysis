@@ -66,7 +66,8 @@ def subtract_fov_stack(path_to_mm_channels, FOV, empty_stack_id, ana_peak_ids, p
 
 		for time in range(subtracted_stack_final.shape[0]):
 			phase_t_img = subtracted_stack_final[time, :, :]
-			filename = f'phase_subtracted_region_{peak_id}_time_{time}.tif'
+			time_string = f"{time:0{4}d}"
+			filename = f'phase_subtracted_region_{peak_id}_time_{time_string}.tif'
 			path = os.path.join(path_to_peak, filename)
 			tifffile.imwrite(path, phase_t_img)
 
