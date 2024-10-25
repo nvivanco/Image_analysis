@@ -17,46 +17,58 @@ import multiprocessing
 
 
 def subtract_fov_stack(path_to_mm_channels, FOV, empty_stack_id, ana_peak_ids, phase_channel):
-    """
-    For a given FOV, loads the precomputed empty stack and does subtraction on
-    all peaks in the FOV designated to be analyzed.
+	"""
+	For a given FOV, loads the precomputed empty stack and does subtraction on
+	all peaks in the FOV designated to be analyzed.
 
-    Args:
-        path_to_mm_channels: Path to the directory containing the MM3 channels.
-        FOV: Field of view to process.
-        empty_stack_id: ID of the empty stack.
-        ana_peak_ids: List of peak IDs to analyze.
-        phase_channel: Index of the phase channel.
+	Args:
+		path_to_mm_channels: Path to the directory containing the MM3 channels.
+		FOV: Field of view to process.
+		empty_stack_id: ID of the empty stack.
+		ana_peak_ids: List of peak IDs to analyze.
+		phase_channel: Index of the phase channel.
 
-    Returns:
-        A list of subtracted stacks for each peak.
-    """
+	Returns:
+		saved subtracted images of mm_channels organized by position and mm_channel
+	"""
 
-    path_to_subtracted_phase_channels = os.path.join(path_to_mm_channels, 'subtracted_phase')
-    os.makedirs(path_to_subtracted_phase_channels, exist_ok=True)
+	path_to_subtracted_phase_channels = os.path.join(path_to_mm_channels, 'subtracted_phase')
+	os.makedirs(path_to_subtracted_phase_channels, exist_ok=True)
+	path_to_FOV = os.path.join(path_to_subtracted_phase_channels, 'FOV_' + FOV)
+	os.makedirs(path_to_FOV, exist_ok=True)
 
-    mm3_channels_dict = load_mm_channels(path_to_mm_channels)
-    empty_channel_stack = tifffile.imread(mm3_channels_dict[FOV][empty_stack_id])
-    empty_channel_stack_phase = empty_channel_stack[:, phase_channel, :, :]
-    ana_peak_ids = sorted(ana_peak_ids)  # Sort for repeatability
+	mm3_channels_dict = load_mm_channels(path_to_mm_channels)
+	empty_channel_stack = tifffile.imread(mm3_channels_dict[FOV][empty_stack_id])
+	empty_channel_stack_phase = empty_channel_stack[:, phase_channel, :, :]
+	ana_peak_ids = sorted(ana_peak_ids)  # Sort for repeatability
 
-    # Load images for the peak and get phase images
-    for peak_id in ana_peak_ids:
-        channel_w_cell_stack = tifffile.imread(mm3_channels_dict[FOV][peak_id])
-        channel_w_cell_stack_phase = channel_w_cell_stack[:, phase_channel, :, :]
+	# Load images for the peak and get phase images
+	for peak_id in ana_peak_ids:
 
-        # Create a list of tuples for multiprocessing
-        subtract_pairs = [(empty_channel_stack_phase[i], channel_w_cell_stack_phase[i]) for i in range(len(empty_channel_stack_phase))]
+		path_to_peak = os.path.join(path_to_FOV, 'channel_' + peak_id)
+		os.makedirs(path_to_peak, exist_ok=True)
 
-        # Use multiprocessing pool to perform subtraction
-        with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as pool:
-            subtracted_imgs = pool.map(subtract_phase, subtract_pairs)
+		channel_w_cell_stack = tifffile.imread(mm3_channels_dict[FOV][peak_id])
+		channel_w_cell_stack_phase = channel_w_cell_stack[:, phase_channel, :, :]
 
-        subtracted_stack_final = np.stack(subtracted_imgs, axis=0)
+		# Create a list of tuples for multiprocessing
+		subtract_pairs = [(empty_channel_stack_phase[i], channel_w_cell_stack_phase[i]) for i in range(len(empty_channel_stack_phase))]
 
-        filename = f'phase_subtracted_FOV{FOV}_region_{peak_id}.tif'
-        path = os.path.join(path_to_subtracted_phase_channels, filename)
-        tifffile.imwrite(path, subtracted_stack_final)
+		# Use multiprocessing pool to perform subtraction
+		with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as pool:
+			subtracted_imgs = pool.map(subtract_phase, subtract_pairs)
+
+		subtracted_stack_final = np.stack(subtracted_imgs, axis=0)
+
+		filename = f'phase_subtracted_FOV{FOV}_region_{peak_id}.tif'
+		path = os.path.join(path_to_subtracted_phase_channels, filename)
+		tifffile.imwrite(path, subtracted_stack_final)
+
+		for time in range(subtracted_stack_final.shape[0]):
+			phase_t_img = subtracted_stack_final[time, :, :]
+			filename = f'phase_subtracted_region_{peak_id}_time_{time}.tif'
+			path = os.path.join(path_to_peak, filename)
+			tifffile.imwrite(path, phase_t_img)
 
 def subtract_phase(params: tuple[np.ndarray, np.ndarray]) -> np.ndarray:
 	""" Adapted from subtract_phase() of napari-mm3.
@@ -516,9 +528,9 @@ def drift_correction_napari(hyperstacked_path):
 				img_path = os.path.join(hyperstacked_path, filename)
 				hyperstacked_img = tifffile.imread(img_path)
 				# multi-channel 2D-movie
-				cd = CorrectDrift(hyperstacked_img, "tcyx")
+				cd = CorrectDrift(dims="tcyx", data=hyperstacked_img)
 				# estimate drift table
-				drifts = cd.estimate_drift(t0=0, channel=0)
+				drifts = cd.estimate_drift(t0=0, channel=0, increment=1, upsample_factor=20, mode='relative')
 				# correct drift
 				img_cor = cd.apply_drifts(drifts)
 				img_cor_file = Path(output_dir_path) / f"drift_cor_{experiment}_xy{position}.tif"
