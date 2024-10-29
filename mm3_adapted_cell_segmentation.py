@@ -11,7 +11,13 @@ from skimage.filters import threshold_otsu
 from scipy import ndimage as ndi
 
 
-def segment_chnl_stack(path_to_phase_channel_stack, save_to_celltk_path):
+def segment_chnl_stack(path_to_phase_channel_stack,
+					   save_to_celltk_path,
+					   OTSU_threshold=1,
+					   first_opening_size=1,
+					   distance_threshold=1,
+					   second_opening_size=1,
+					   min_object_size=25):
 	"""
 	For a given fov and peak (channel), do segmentation for all images in the
 	subtracted .tif stack.
@@ -28,7 +34,13 @@ def segment_chnl_stack(path_to_phase_channel_stack, save_to_celltk_path):
 	# image by image for debug
 	segmented_imgs = []
 	for time in range(phase_stack.shape[0]):
-		unstacked_seg_image = segment_image(phase_stack[time, :, :])
+		unstacked_seg_image = segment_image(phase_stack[time, :, :],
+											OTSU_threshold,
+											first_opening_size,
+											distance_threshold,
+											second_opening_size,
+											min_object_size)
+
 		unstacked_seg_image = unstacked_seg_image.astype("uint8")
 		unstacked_seg_filename = f'mask{time:03d}.tiff'
 		unstacked_path = os.path.join(path_to_mm3_seg, unstacked_seg_filename)
@@ -153,25 +165,29 @@ def display_segmentation(phase_path, mask_path, start=0, end=20):
 		mask_files = read_celltk_masks(mask_path)
 		mask_stack = stack_images_tyx(mask_files)
 
-	# Get a colormap with 40 distinct colors, for 40 potential cell labels
-	cmap = plt.cm.get_cmap('tab20', 20)
+	final_mask = mask_stack[end, :, :]
+	total_number_labels = len(np.unique(final_mask))
+
+	number_of_colors_needed = max(20, total_number_labels)
+	# Get a colormap with  distinct colors, for potential cell labels
+	cmap = plt.cm.get_cmap('tab20', number_of_colors_needed)
 	# Create a dictionary mapping integers to hex color codes
 	color_dict = {}
-	for i in range(21):
-		color = cmap(i)[:3]  # Extract RGB values
-		color_dict[i] = color
+	for j in range(number_of_colors_needed + 1):
+		color = cmap(j)[:3]  # Extract RGB values
+		color_dict[j] = color
 
 	num_images = len(range(start, end, 1))  # need to add a way to calculate images if numbers are not consecutive
-	num_cols = max(int(math.sqrt(num_images)), 10)
-	num_rows = math.ceil(num_images / num_cols)
-	fig_width = num_cols / 2
+	num_cols = num_images
+	num_rows = 1
+	fig_width = num_cols / num_rows
 
-	fig, axs = plt.subplots(nrows=num_rows, ncols=num_cols, figsize=(fig_width, 10),
-							gridspec_kw={'wspace': 0.1, 'hspace': 0.1})
+	fig, axs = plt.subplots(nrows=num_rows, ncols=num_cols, figsize=(fig_width, phase_stack.shape[2]),
+							gridspec_kw={'wspace': 0.05, 'hspace': 0.05})
 	# Flatten the axs array for easier indexing
 	axs = axs.flatten()
 
-	for i in range(num_images):
+	for i in range(start, end, 1):
 		phase = phase_stack[i, :, :]
 		mask = mask_stack[i, :, :]
 
@@ -182,14 +198,14 @@ def display_segmentation(phase_path, mask_path, start=0, end=20):
 				colored_mask[x, y] = color_dict[mask[x, y]]
 
 		# Access the specific subplot and plot the image
-		axs[i].imshow(phase, cmap='gray')
-		axs[i].imshow(colored_mask, alpha=0.4)
-		axs[i].axis('off')
+		axs[i - start].imshow(phase, cmap='gray')
+		axs[i - start].imshow(colored_mask, alpha=0.4)
+		axs[i - start].axis('off')
 
 	patches = []
 	for label, color in color_dict.items():
 		patches.append(mpatches.Patch(color=color, label=f"Label {label}"))
-	plt.legend(handles=patches, bbox_to_anchor=(1.05, 2.0), loc='upper left')
+	plt.legend(handles=patches, bbox_to_anchor=(1.05, num_rows), loc='upper left')
 	plt.show()
 
 def read_celltk_masks(path):
