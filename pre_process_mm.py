@@ -186,7 +186,7 @@ def extract_mm_channels(path_to_tcyx_FOVs, chan_w=10, chan_sep=45, crop_wp=10, c
 
 		filename = f'FOV{position}_mm_channel_mask.tif'
 		path = os.path.join(path_to_mm_channels, filename)
-		tifffile.imwrite(path, masked_image)
+		tifffile.imwrite(path, final_image)
 
 		print("saving sliced microfluidic channels as tcyx stacks")
 		for trench in mask_corners_dict.keys():
