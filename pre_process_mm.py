@@ -15,7 +15,6 @@ from PIL import Image, ImageDraw, ImageFont
 import multiprocessing
 
 
-
 def subtract_fov_stack(path_to_mm_channels, FOV, empty_stack_id, ana_peak_ids, phase_channel):
 	"""
 	For a given FOV, loads the precomputed empty stack and does subtraction on
@@ -245,7 +244,7 @@ def make_consensus_mask(chnl_loc_dict, image_rows, image_cols, crop_wp=10, chan_
 	consensus_mask = consensus_mask.astype("float32") / float(np.amax(consensus_mask))
 	return consensus_mask, mask_corners_dict
 
-def find_channel_locs(image_data, chan_w = 10, chan_sep = 45,  crop_wp= 10, chan_snr = 1):
+def find_channel_locs(image_data, chan_w = 10, chan_sep = 45, crop_wp= 10, chan_snr = 1):
     """
     Adapted from napari-mm3.
     Finds the location of channels from a phase contrast image. The channels are returned in
@@ -331,38 +330,44 @@ def midpoint_distance(line, center):
     distance = np.sqrt((midpoint_x - center[0])**2 + (midpoint_y - center[1])**2)
     return distance
 
-def crop_around_central_flow(h_lines, w, h, growth_channel_length= 150):
-    threshold = 200 # distance from center of image
+def crop_around_central_flow(h_lines, w, h, growth_channel_length=400):
+    threshold = 500  # Distance from center of image if using 1x1 binning in DuMM
     center_x, center_y = w // 2, h // 2
-    if h_lines is not None:
+
+    if h_lines:
         # Filter lines based on distance
         filtered_lines = []
         for line in h_lines:
             distance = midpoint_distance(line, (center_x, center_y))
             if distance <= threshold:
                 filtered_lines.append(line)
-        x1, y1, x2, y2 = filtered_lines[0][0]
+        if filtered_lines:
+            x1, y1, x2, y2 = filtered_lines[0][0]
 
-        # Determine crop boundaries
-        crop_start = max(y1 - growth_channel_length, 0)
-        crop_end = min(y1 + 150, h)
+            # Determine crop boundaries
+            # Need to change if channels facing up or down
+            crop_start = max(y1, 0)
+            crop_end = min(y1 + growth_channel_length, h)
 
-        print('Cropping reference image')
-
-        return crop_start, crop_end
-
+            print('Cropping reference image')
+            return crop_start, crop_end
+        else:
+            print('lines along central flow channel not found, '
+				  'consider changing distance threshold from center '
+				  'of the image. This changes with different binning options')
+            return None
     else:
-        print('Warning: horizontal lines were not detected')
+        print('lines were not found in image')
         return None
 
-def rotate_stack(path_to_stack, c=0, growth_channel_length=295):
+def rotate_stack(path_to_stack, c=0, growth_channel_length=400):
 	"""Rotates and crops a stack of cyx or tcyx format files.
 
 	Args:
 		path_to_stack: Path to the stack of files in string format.
 		c: Phase channel index (integer, default=0).
-		growth_channel_length: Length in pixels of the growth channel (integer, default=295).
-			Shorter channels are assumed to be around 130 pixels.
+		growth_channel_length: Length in pixels of the growth channel (integer, default=400).
+			this really depends on the binning of the image. Images are assummed to be 1x1
 
 	Returns:
 		path_to_rotated_images: Path to the directory containing the rotated files (string).
@@ -421,7 +426,6 @@ def rotate_stack(path_to_stack, c=0, growth_channel_length=295):
 		plt.axis('off')  # Hide axes labels and ticks
 		plt.draw()# Show the plot
 
-
 		# Save the rotated and cropped stack
 		new_filename = f'rotated_{filename}'
 		new_path = os.path.join(path_to_rotated_images, new_filename)
@@ -438,7 +442,7 @@ def detect_clear_image(image):
         return True
 
 
-def napari_ready_format_drift_correct(root_dir, experiment_name, c=0):
+def drift_correct(root_dir, experiment_name, c=0):
 	"""
 	Arg
 	root_dir: parent directory containing multiple 'Pos#' directories,
@@ -446,20 +450,13 @@ def napari_ready_format_drift_correct(root_dir, experiment_name, c=0):
 	File name is default from the Covert lab microscope.
 	experiment_name: unique id to label output files
 	c = int representing phase channel index
-	output: drift corrected files across multiple positions and timepoints. Found within
-	'cyx_files_for_mm3' directory
+	output: drift corrected files across multiple positions and timepoints.
 
 	"""
 
-	hyperstacked_path = os.path.join(root_dir, 'hyperstacked')
-	drift_corrected_path = os.path.join(hyperstacked_path, 'drift_corrected')
-	output_dir_path = os.path.join(drift_corrected_path, 'cyx_files_for_mm3')
+	hyperstacked_path, time_dict = hyperstack_tif_tcyx(root_dir, experiment_name, c)
 
-	time_dict = hyperstack_tif_tcyx(root_dir, experiment_name)
-
-	drift_correction_napari(hyperstacked_path)
-
-	unstack_tcyx_to_cyx(drift_corrected_path, time_dict)
+	drift_corrected_path = drift_correction_napari(hyperstacked_path)
 
 	return drift_corrected_path
 
@@ -476,8 +473,7 @@ def hyperstack_tif_tcyx(root_dir, experiment_name, c=0):
 	# Create output directory if it doesn't exist
 	output_dir_path = os.path.join(root_dir, 'renamed')
 	os.makedirs(output_dir_path, exist_ok=True)
-	stacked_path = os.path.join(root_dir, 'stacked')
-	os.makedirs(stacked_path, exist_ok=True)
+
 	hyperstacked_path = os.path.join(root_dir, 'hyperstacked')
 	os.makedirs(hyperstacked_path, exist_ok=True)
 
@@ -492,17 +488,16 @@ def hyperstack_tif_tcyx(root_dir, experiment_name, c=0):
 			for channel, image_path in sorted(channels.items()):
 				new_filename = f'{experiment_name}_t{time:04.0f}xy{position}c{channel}.tif'
 				new_path = os.path.join(output_dir_path, new_filename)
+				print(new_path)
 				try:
 					# Copy the file to the new path
 					shutil.copy(str(image_path), str(new_path))
-					channel_image = tifffile.TiffFile(new_path).asarray()
+					channel_image = tifffile.imread(new_path)
 					image_data.append(channel_image)
 
 				except OSError as e:
 					print(f'Error copying file: {e}')
 			stacked_image = np.stack(image_data, axis=0)  # Assuming channels are the first dimension
-			output_stacked_file = Path(stacked_path) / f"{experiment_name}_t{time:04.0f}xy{position}.tif"
-			tifffile.imwrite(str(output_stacked_file), stacked_image)
 			phase_image = stacked_image[c, :, :]
 			if detect_clear_image(phase_image):  # only time stack clear images
 				time_stacked_image_data.append(stacked_image)
@@ -514,7 +509,7 @@ def hyperstack_tif_tcyx(root_dir, experiment_name, c=0):
 		output_hyperstacked_file = Path(hyperstacked_path) / f"{experiment_name}_xy{position}.tif"
 		tifffile.imwrite(str(output_hyperstacked_file), hyperstacked_image)
 
-	return time_clear_dict
+	return hyperstacked_path, time_clear_dict
 
 
 def drift_correction_napari(hyperstacked_path):
@@ -536,6 +531,7 @@ def drift_correction_napari(hyperstacked_path):
 				img_cor = cd.apply_drifts(drifts)
 				img_cor_file = Path(output_dir_path) / f"drift_cor_{experiment}_xy{position}.tif"
 				tifffile.imwrite(str(img_cor_file), img_cor)
+	return output_dir_path
 
 
 def org_by_timepoint(input_dirs):
@@ -579,14 +575,14 @@ def org_by_timepoint(input_dirs):
 	return file_groups
 
 
-def unstack_tcyx_to_cyx(path_to_hyperstacked, time_clear_dict):
+def unstack_tcyx_to_cyx(path_to_hyperstacked):
 	"""
 	input_dir: directory where movies are hyperstacked as tcyx
 	output_dir: The output directory for TIFF files stacked as cyx
 	"""
 
 	# Create output directory if it doesn't exist
-	output_dir_path = os.path.join(path_to_hyperstacked, 'cyx_files_for_mm3')
+	output_dir_path = os.path.join(path_to_hyperstacked, 'unstacked_files')
 	os.makedirs(output_dir_path, exist_ok=True)
 
 	file_groups = org_by_timepoint([path_to_hyperstacked])
@@ -598,15 +594,12 @@ def unstack_tcyx_to_cyx(path_to_hyperstacked, time_clear_dict):
 				if match:
 					experiment, position = match.groups()
 					hyperstacked_img = tifffile.imread(image_path)
-					real_times = [key for key, val in time_clear_dict[position].items() if val == 'clear']
-					index_times = [i for i in range(0, hyperstacked_img.shape[0], 1)]
-					index_to_real_time = dict(zip(index_times, real_times))
-
-					for index in range(hyperstacked_img.shape[0]):
-						cyx_image = hyperstacked_img[index, :, :, :]
-						real_time = index_to_real_time[index]
-						output_cyx_file = Path(output_dir_path) / f"{experiment}_t{real_time:04.0f}xy{position}.tif"
-						tifffile.imwrite(str(output_cyx_file), cyx_image)
+					for time_index in range(hyperstacked_img.shape[0]):
+						cyx_image = hyperstacked_img[time_index, :, :, :]
+						for channel_index in range(cyx_image.shape[0]):
+							yx_image = cyx_image[channel_index, :, :]
+							output_yx_file = Path(output_dir_path) / f"{experiment}_t{time_index:04.0f}xy{position}_c{channel_index:04.0f}.tif"
+							tifffile.imwrite(str(output_yx_file), yx_image)
 
 
 def plot_lines_across_FOVs(path_to_stack, c=0):
@@ -639,7 +632,7 @@ def calculate_line_angle(x1, y1, x2, y2):
 def find_lines(img):
 	normalized_img = (img / img.max() * 255).astype(np.uint8)
 	edges = cv2.Canny(normalized_img, 50, 150)
-	lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 100, minLineLength=100, maxLineGap=10)
+	lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 100, minLineLength=130, maxLineGap=100) #max line gap is going to depend on pixel binning. currently set for 1x1 bin
 	return lines
 
 
@@ -678,7 +671,7 @@ def calculate_rotation_angle(lines):
 def plot_lines(original_img, lines):
 	plt.figure()
 	plt.imshow(original_img, cmap='gray')
-	if lines is not None:
+	if lines:
 		for line in lines:
 			x1, y1, x2, y2 = line[0]
 			plt.plot([x1, x2], [y1, y2], color='green', linewidth=2)
@@ -704,7 +697,7 @@ def apply_image_rotation(image_stack, rotation_angle):
 	if image_stack.ndim == 4:
 		h, w = image_stack.shape[2:]
 		center = (w // 2, h // 2)
-		print(center)
+		print(rotation_angle)
 		M = cv2.getRotationMatrix2D(center, rotation_angle, 1.0)
 		for time in range(image_stack.shape[0]):
 			for channel in range(image_stack.shape[1]):
