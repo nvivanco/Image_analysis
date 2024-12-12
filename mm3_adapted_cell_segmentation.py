@@ -4,39 +4,36 @@ import numpy as np
 import tifffile
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-import math
 import warnings
 from skimage import segmentation, morphology
 from skimage.filters import threshold_otsu
 from scipy import ndimage as ndi
 
-
 def segment_chnl_stack(path_to_phase_channel_stack,
-					   save_to_celltk_path,
+					   output_path,
 					   OTSU_threshold=1,
-					   first_opening_size=1,
 					   distance_threshold=1,
 					   second_opening_size=1,
 					   min_object_size=25):
 	"""
 	For a given fov and peak (channel), do segmentation for all images in the
 	subtracted .tif stack.
-	Adapted from napri-mm3
+	Adapted from napari-mm3
 	"""
 
-	path_to_mm3_seg = os.path.join(save_to_celltk_path, 'mm3_segmentation')
+	path_to_mm3_seg = os.path.join(output_path, 'mm3_segmentation')
 	os.makedirs(path_to_mm3_seg, exist_ok=True)
 
 	save_to_path = os.path.dirname(path_to_phase_channel_stack)
 	filename = os.path.basename(path_to_phase_channel_stack)
 	phase_stack = tifffile.imread(path_to_phase_channel_stack)
 
+
 	# image by image for debug
 	segmented_imgs = []
 	for time in range(phase_stack.shape[0]):
 		unstacked_seg_image = segment_image(phase_stack[time, :, :],
 											OTSU_threshold,
-											first_opening_size,
 											distance_threshold,
 											second_opening_size,
 											min_object_size)
@@ -58,13 +55,12 @@ def segment_chnl_stack(path_to_phase_channel_stack,
 
 
 def segment_image(image,
-                  OTSU_threshold = 1,
-                  first_opening_size = 1,
-                  distance_threshold = 1,
-                  second_opening_size = 1,
-                  min_object_size = 25):
+                  OTSU_threshold=1,
+                  distance_threshold=1,
+                  second_opening_size=1,
+                  min_object_size=25):
     """
-    From OTSU segementation on napari-mm3
+    Adapted From OTSU segementation on napari-mm3, morph uses diagonal footprint
     Segments a subtracted image and returns a labeled image
 
     Parameters
@@ -91,7 +87,11 @@ def segment_image(image,
     # Opening = erosion then dialation.
     # opening smooths images, breaks isthmuses, and eliminates protrusions.
     # "opens" dark gaps between bright features.
-    morph = morphology.binary_opening(threshholded, morphology.disk(first_opening_size))
+    # Create a diagonal line-shaped footprint
+    diagonal_footprint = np.zeros((3, 3))
+    np.fill_diagonal(diagonal_footprint, 1)
+
+    morph = morphology.binary_opening(threshholded, diagonal_footprint)
 
     # if this image is empty at this point (likely if there were no cells), just return
     # zero array
@@ -151,8 +151,6 @@ def segment_image(image,
         return np.zeros_like(image)
 
     return labeled_image
-
-
 def display_segmentation(phase_path, mask_path, start=0, end=20):
 	if os.path.isfile(phase_path):
 		phase_stack = tifffile.imread(phase_path)
