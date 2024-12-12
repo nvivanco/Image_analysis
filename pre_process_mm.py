@@ -15,58 +15,62 @@ from PIL import Image, ImageDraw, ImageFont
 import multiprocessing
 
 
-def subtract_fov_stack(path_to_mm_channels, FOV, empty_stack_id, ana_peak_ids, phase_channel):
+def subtract_fov_stack(path_to_mm_channels, FOV, empty_stack_id, ana_peak_ids, method = 'phase', channel_index = 0):
 	"""
 	For a given FOV, loads the precomputed empty stack and does subtraction on
 	all peaks in the FOV designated to be analyzed.
 
 	Args:
 		path_to_mm_channels: Path to the directory containing the MM3 channels.
-		FOV: Field of view to process.
-		empty_stack_id: ID of the empty stack.
-		ana_peak_ids: List of peak IDs to analyze.
-		phase_channel: Index of the phase channel.
+		FOV: str, Field of view to process.
+		empty_stack_id: str, ID of the empty stack.
+		ana_peak_ids: List of peak IDs (in str type) to analyze.
+		method: str, either 'phase' or 'fluor' depending on channel type
+		channel_index: integer, index of the phase or fluorophore channel.
 
 	Returns:
 		saved subtracted images of mm_channels organized by position and mm_channel
 	"""
 
-	path_to_subtracted_phase_channels = os.path.join(path_to_mm_channels, 'subtracted_phase')
-	os.makedirs(path_to_subtracted_phase_channels, exist_ok=True)
-	path_to_FOV = os.path.join(path_to_subtracted_phase_channels, 'FOV_' + FOV)
+	path_to_subtracted_channels = os.path.join(path_to_mm_channels, 'subtracted')
+	os.makedirs(path_to_subtracted_channels, exist_ok=True)
+	path_to_FOV = os.path.join(path_to_subtracted_channels, 'FOV_' + FOV)
 	os.makedirs(path_to_FOV, exist_ok=True)
 
 	mm3_channels_dict = load_mm_channels(path_to_mm_channels)
 	empty_channel_stack = tifffile.imread(mm3_channels_dict[FOV][empty_stack_id])
-	empty_channel_stack_phase = empty_channel_stack[:, phase_channel, :, :]
 	ana_peak_ids = sorted(ana_peak_ids)  # Sort for repeatability
+	empty_channel_stack_ch = empty_channel_stack[:, channel_index, :, :]
 
 	# Load images for the peak and get phase images
 	for peak_id in ana_peak_ids:
 
-		path_to_peak = os.path.join(path_to_FOV, 'channel_' + peak_id)
+		path_to_peak = os.path.join(path_to_FOV, 'region_' + peak_id)
 		os.makedirs(path_to_peak, exist_ok=True)
 
 		channel_w_cell_stack = tifffile.imread(mm3_channels_dict[FOV][peak_id])
-		channel_w_cell_stack_phase = channel_w_cell_stack[:, phase_channel, :, :]
+		channel_w_cell_stack_ch = channel_w_cell_stack[:, channel_index, :, :]
 
 		# Create a list of tuples for multiprocessing
-		subtract_pairs = [(empty_channel_stack_phase[i], channel_w_cell_stack_phase[i]) for i in range(len(empty_channel_stack_phase))]
+		subtract_pairs = [(empty_channel_stack_ch[i], channel_w_cell_stack_ch[i]) for i in range(len(empty_channel_stack_ch))]
 
 		# Use multiprocessing pool to perform subtraction
 		with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as pool:
-			subtracted_imgs = pool.map(subtract_phase, subtract_pairs)
+			if method == 'phase':
+				subtracted_imgs = pool.map(subtract_phase, subtract_pairs)
+			elif method == 'fluor':
+				subtracted_imgs = pool.map(subtract_fluor, subtract_pairs)
 
 		subtracted_stack_final = np.stack(subtracted_imgs, axis=0)
 
-		filename = f'phase_subtracted_FOV{FOV}_region_{peak_id}.tif'
-		path = os.path.join(path_to_subtracted_phase_channels, filename)
+		filename = f'subtracted_FOV_{FOV}_region_{peak_id}_c_{str(channel_index)}.tif'
+		path = os.path.join(path_to_subtracted_channels, filename)
 		tifffile.imwrite(path, subtracted_stack_final)
 
 		for time in range(subtracted_stack_final.shape[0]):
 			phase_t_img = subtracted_stack_final[time, :, :]
 			time_string = f"{time:0{4}d}"
-			filename = f'phase_subtracted_region_{peak_id}_time_{time_string}.tif'
+			filename = f'subtracted_FOV_{FOV}_region_{peak_id}_time_{time_string}_c_{str(channel_index)}.tif'
 			path = os.path.join(path_to_peak, filename)
 			tifffile.imwrite(path, phase_t_img)
 
@@ -116,6 +120,62 @@ def subtract_phase(params: tuple[np.ndarray, np.ndarray]) -> np.ndarray:
 
 	return channel_subtracted
 
+
+def subtract_fluor(params: tuple[np.ndarray, np.ndarray]) -> np.ndarray:
+	"""subtract_fluor does a simple subtraction of one image to another. Unlike subtract_phase,
+	there is no alignment. Also, the empty channel is subtracted from the full channel.
+
+	Parameters
+	image_pair : tuple of length two with; (image, empty_mean)
+
+	Returns
+	channel_subtracted : np.array
+		The subtracted image.
+
+	Called by
+	subtract_fov_stack
+	"""
+	empty_channel = params[0]
+	channel_with_cells = params[1]
+
+
+	# check frame size of cropped channel and background, always keep crop channel size the same
+	crop_size = np.shape(channel_with_cells)[:2]
+	empty_size = np.shape(empty_channel)[:2]
+	if crop_size != empty_size:
+		if crop_size[0] > empty_size[0] or crop_size[1] > empty_size[1]:
+			pad_row_length = max(crop_size[0] - empty_size[0], 0)  # prevent negatives
+			pad_column_length = max(crop_size[1] - empty_size[1], 0)
+			empty_channel = np.pad(
+				empty_channel,
+				[
+					[
+						np.int(0.5 * pad_row_length),
+						pad_row_length - np.int(0.5 * pad_row_length),
+					],
+					[
+						np.int(0.5 * pad_column_length),
+						pad_column_length - np.int(0.5 * pad_column_length),
+					],
+					[0, 0],
+				],
+				"edge",
+			)
+		empty_size = np.shape(empty_channel)[:2]
+		if crop_size[0] < empty_size[0] or crop_size[1] < empty_size[1]:
+			empty_channel = empty_channel[
+							: crop_size[0],
+							: crop_size[1],
+							]
+
+	# subtract empty  channel from fluorophore cell image
+	channel_subtracted = channel_with_cells.astype("int32") - empty_channel.astype("int32")
+
+	# just zero out anything less than 0.
+	channel_subtracted[channel_subtracted < 0] = 0
+	channel_subtracted = channel_subtracted.astype("uint16")  # change back to 16bit
+
+	return channel_subtracted
 
 def load_mm_channels(input_dir):
 	"""Group files by FOV and mm_channel id, TIFFs are stacked in tcyx format
@@ -593,12 +653,14 @@ def unstack_tcyx_to_cyx(path_to_hyperstacked):
 				match = re.match(r'(.*)_xy(\d+)\.', filename)
 				if match:
 					experiment, position = match.groups()
+					xy_dir = os.path.join(output_dir_path, position)
+					os.makedirs(xy_dir, exist_ok=True)
 					hyperstacked_img = tifffile.imread(image_path)
 					for time_index in range(hyperstacked_img.shape[0]):
 						cyx_image = hyperstacked_img[time_index, :, :, :]
 						for channel_index in range(cyx_image.shape[0]):
 							yx_image = cyx_image[channel_index, :, :]
-							output_yx_file = Path(output_dir_path) / f"{experiment}_t{time_index:04.0f}xy{position}_c{channel_index:04.0f}.tif"
+							output_yx_file = Path(xy_dir) / f"{experiment}_t{time_index:04.0f}xy{position}_c{channel_index:04.0f}.tif"
 							tifffile.imwrite(str(output_yx_file), yx_image)
 
 
