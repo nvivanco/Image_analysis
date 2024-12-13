@@ -11,10 +11,11 @@ from scipy import ndimage as ndi
 
 def segment_chnl_stack(path_to_phase_channel_stack,
 					   output_path,
-					   OTSU_threshold=1,
-					   distance_threshold=1,
+					   OTSU_threshold=1.5,
+					   first_opening=5,
+					   distance_threshold=3,
 					   second_opening_size=1,
-					   min_object_size=25):
+					   min_object_size=5):
 	"""
 	For a given fov and peak (channel), do segmentation for all images in the
 	subtracted .tif stack.
@@ -34,6 +35,7 @@ def segment_chnl_stack(path_to_phase_channel_stack,
 	for time in range(phase_stack.shape[0]):
 		unstacked_seg_image = segment_image(phase_stack[time, :, :],
 											OTSU_threshold,
+											first_opening,
 											distance_threshold,
 											second_opening_size,
 											min_object_size)
@@ -55,10 +57,11 @@ def segment_chnl_stack(path_to_phase_channel_stack,
 
 
 def segment_image(image,
-                  OTSU_threshold=1,
-                  distance_threshold=1,
+                  OTSU_threshold=1.5,
+                  first_opening = 5,
+                  distance_threshold=3,
                   second_opening_size=1,
-                  min_object_size=25):
+                  min_object_size=5):
     """
     Adapted From OTSU segementation on napari-mm3, morph uses diagonal footprint
     Segments a subtracted image and returns a labeled image
@@ -88,7 +91,7 @@ def segment_image(image,
     # opening smooths images, breaks isthmuses, and eliminates protrusions.
     # "opens" dark gaps between bright features.
     # Create a diagonal line-shaped footprint
-    diagonal_footprint = np.zeros((3, 3))
+    diagonal_footprint = np.zeros((first_opening, first_opening))
     np.fill_diagonal(diagonal_footprint, 1)
 
     morph = morphology.binary_opening(threshholded, diagonal_footprint)
