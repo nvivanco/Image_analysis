@@ -154,60 +154,56 @@ def segment_image(image,
         return np.zeros_like(image)
 
     return labeled_image
-def display_segmentation(phase_path, mask_path, start=0, end=20):
-	if os.path.isfile(phase_path):
-		phase_stack = tifffile.imread(phase_path)
-	elif os.path.isdir(phase_path):
-		phase_files = read_phase_sub(phase_path)
-		phase_stack = stack_images_tyx(phase_files)
-	if os.path.isfile(mask_path):
-		mask_stack = tifffile.imread(mask_path)
-	elif os.path.isdir(mask_path):
-		mask_files = read_celltk_masks(mask_path)
-		mask_stack = stack_images_tyx(mask_files)
+def display_segmentation(path_to_original_stack, mask_path, start=0, end=20, alpha = 0.5):
+    # Check if files exist
+    if os.path.isfile(path_to_original_stack):
+        phase_stack = tifffile.imread(path_to_original_stack)
+    if os.path.isfile(mask_path):
+        mask_stack = tifffile.imread(mask_path)
 
-	final_mask = mask_stack[end, :, :]
-	total_number_labels = len(np.unique(final_mask))
+    final_mask = mask_stack[end, :, :]
+    total_number_labels = len(np.unique(final_mask))
 
-	number_of_colors_needed = max(20, total_number_labels)
-	# Get a colormap with  distinct colors, for potential cell labels
-	cmap = plt.cm.get_cmap('tab20', number_of_colors_needed)
-	# Create a dictionary mapping integers to hex color codes
-	color_dict = {}
-	for j in range(number_of_colors_needed + 1):
-		color = cmap(j)[:3]  # Extract RGB values
-		color_dict[j] = color
+    number_of_colors_needed = max(20, total_number_labels)
+    # Get a colormap with  distinct colors, for potential cell labels
+    cmap = plt.cm.get_cmap('tab20', number_of_colors_needed)
+    # Create a dictionary mapping integers to hex color codes
+    color_dict = {}
+    for j in range(number_of_colors_needed + 1):
+        color = cmap(j)[:3]  # Extract RGB values
+        color_dict[j] = color
 
-	num_images = len(range(start, end, 1))  # need to add a way to calculate images if numbers are not consecutive
-	num_cols = num_images
-	num_rows = 1
-	fig_width = num_cols / num_rows
+    num_images = len(range(start, end, 1))  # need to add a way to calculate images if numbers are not consecutive
 
-	fig, axs = plt.subplots(nrows=num_rows, ncols=num_cols, figsize=(fig_width, phase_stack.shape[2]),
-							gridspec_kw={'wspace': 0.05, 'hspace': 0.05})
-	# Flatten the axs array for easier indexing
-	axs = axs.flatten()
+    # Calculate figure size
+    figxsize = phase_stack.shape[2] * num_images / 100.0
+    figysize = phase_stack.shape[1] / 100.0
 
-	for i in range(start, end, 1):
-		phase = phase_stack[i, :, :]
-		mask = mask_stack[i, :, :]
+    fig, axs = plt.subplots(nrows=1, ncols=num_images, figsize=(figxsize, figysize), facecolor="black",
+                            edgecolor="black", gridspec_kw={'wspace': 0, 'hspace': 0, 'left': 0, 'right': 1, 'top': 1, 'bottom': 0})
+    # Flatten the axs array for easier indexing
+    axs = axs.flatten()
 
-		# Create a colormapped image
-		colored_mask = np.zeros((mask.shape[0], mask.shape[1], 3))
-		for x in range(mask.shape[0]):
-			for y in range(mask.shape[1]):
-				colored_mask[x, y] = color_dict[mask[x, y]]
+    for i in range(start, end, 1):
+        phase = phase_stack[i, :, :]
+        mask = mask_stack[i, :, :]
 
-		# Access the specific subplot and plot the image
-		axs[i - start].imshow(phase, cmap='gray')
-		axs[i - start].imshow(colored_mask, alpha=0.4)
-		axs[i - start].axis('off')
+        # Create a colormapped image
+        colored_mask = np.zeros((mask.shape[0], mask.shape[1], 3))
+        for x in range(mask.shape[0]):
+            for y in range(mask.shape[1]):
+                colored_mask[x, y] = color_dict[mask[x, y]]
 
-	patches = []
-	for label, color in color_dict.items():
-		patches.append(mpatches.Patch(color=color, label=f"Label {label}"))
-	plt.legend(handles=patches, bbox_to_anchor=(1.05, num_rows), loc='upper left')
-	plt.show()
+        # Access the specific subplot and plot the image
+        axs[i - start].imshow(phase, cmap='gray')
+        axs[i - start].imshow(colored_mask, alpha=alpha)
+        axs[i - start].axis('off')
+
+    patches = []
+    for label, color in color_dict.items():
+        patches.append(mpatches.Patch(color=color, label=f"Label {label}"))
+    plt.legend(handles=patches, bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.show()
 
 def read_celltk_masks(path):
     file_groups = {}
