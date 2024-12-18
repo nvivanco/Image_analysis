@@ -4,9 +4,11 @@ import pre_process_mm
 if __name__ == '__main__':
 
 
-	#root_dir = '/Users/noravivancogonzalez/Desktop/20241114'
+	root_dir = '/Users/noravivancogonzalez/Desktop/20241114'
 
 	#drift_corrected_path = pre_process_mm.drift_correct(root_dir, 'DuMM', c=0)
+
+	drift_corrected_path = '/Users/noravivancogonzalez/Desktop/20241114/hyperstacked/drift_corrected'
 
 	#path_to_rotated_images = pre_process_mm.rotate_stack(drift_corrected_path, c=0, growth_channel_length=400)
 	# growth channel length depends on # of pixels, which is affected by binning

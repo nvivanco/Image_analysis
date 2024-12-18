@@ -586,7 +586,7 @@ def drift_correction_napari(hyperstacked_path):
 				# multi-channel 2D-movie
 				cd = CorrectDrift(dims="tcyx", data=hyperstacked_img)
 				# estimate drift table
-				drifts = cd.estimate_drift(t0=0, channel=0, increment=1, upsample_factor=20, mode='relative')
+				drifts = cd.estimate_drift(t0=0, channel=0, increment=1, upsample_factor=100, mode='relative')
 				# correct drift
 				img_cor = cd.apply_drifts(drifts)
 				img_cor_file = Path(output_dir_path) / f"drift_cor_{experiment}_xy{position}.tif"
