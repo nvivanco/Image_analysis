@@ -11,15 +11,6 @@ import six
 import tifffile
 import cell_class_from_mm3 as cell
 
-fov_id = '001'
-peak_id = '1164' # '2227' #'1314'
-path_to_phase_stack = f'/Users/noravivancogonzalez/Desktop/20241114/hyperstacked/drift_corrected/rotated/mm_channels/subtracted/subtracted_FOV_{fov_id}_region_{peak_id}_c_0.tif'
-labeled_stack = f'/Users/noravivancogonzalez/Desktop/20241114/hyperstacked/drift_corrected/rotated/mm_channels/subtracted/mm3_segmented_subtracted_FOV_{fov_id}_region_{peak_id}_c_0.tif'
-path_to_fluor_stack = f'/Users/noravivancogonzalez/Desktop/20241114/hyperstacked/drift_corrected/rotated/mm_channels/subtracted/subtracted_FOV_{fov_id}_region_{peak_id}_c_1.tif'
-
-cells_dict = make_lineage_chnl_stack(path_to_stack = path_to_phase_stack, labeled_stack = labeled_stack, fov_id = int(fov_id), peak_id = int(peak_id), time_btwn_frames =5, pxl2um = 1)
-find_cell_intensities(path_to_fluor_stack, labeled_stack, cells_dict, midline=False)
-
 def find_cell_intensities(path_to_original_stack,
                           path_to_segmented_stack,
                           cells,
