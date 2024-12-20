@@ -9,7 +9,47 @@ import matplotlib.patches as mpatches
 import seaborn as sns
 import six
 import tifffile
+import pandas as pd
 import cell_class_from_mm3 as cell
+
+
+def cells2df(cells, num_time_frames=2,
+             columns=['fov', 'peak', 'birth_label', 'parent', 'daughters', 'birth_time', 'times',
+                      'labels', 'bboxes', 'areas', 'lengths', 'widths', 'orientations', 'centroids',
+                      'tau', 'fl_area_avgs']) -> pd.DataFrame:
+    """
+    Take cell data (a dicionary of Cell objects) and return a dataframe.
+    Only returns cells that are present in more than a certain number of time frames (num_time_frames defaults to 2)
+
+
+    """
+    # Make dataframe for plotting variables
+    cells_dict = {cell_id: vars(cell) for cell_id, cell in cells.items()}
+    df = pd.DataFrame(
+        cells_dict
+    ).transpose()
+    final_cells_pd = df[columns]
+    final_cells_pd = final_cells_pd.sort_values(by=["fov", "peak", "birth_time", "birth_label"])
+    final_cells_pd.reset_index(inplace=True)
+    final_cells_pd.rename(columns={'index': 'cell_id',
+                                   'abs_times': 'abs_times_(sec)',
+                                   'tau': 'generation time_(min)',
+                                   'times': 'time_index',
+                                   'birth_time': 'birth_time_index',
+                                   'areas': 'areas_(pxls^2)',
+                                   'lengths': 'lengths_(pxls)',
+                                   'widths': 'widths_(pxls)'}, inplace=True)
+    cols_to_unstack = ['time_index', 'labels', 'bboxes',
+                       'areas_(pxls^2)', 'lengths_(pxls)', 'widths_(pxls)', 'orientations',
+                       'centroids', 'fl_area_avgs']
+    filtered_cells_pd = final_cells_pd[final_cells_pd['time_index'].apply(len) > num_time_frames]
+    f_cells = filtered_cells_pd.explode(cols_to_unstack)
+    f_cells[['bb_xLeft', 'bb_yTop', 'bb_width', 'bb_height']] = pd.DataFrame(f_cells['bboxes'].tolist(),
+                                                                             index=f_cells.index)
+    f_cells.drop(['bboxes'], axis=1, inplace=True)
+
+    return f_cells
+
 
 def find_cell_intensities(path_to_original_stack,
                           path_to_segmented_stack,
