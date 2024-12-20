@@ -460,8 +460,6 @@ def connect_mother_daughter(
     """
     # daughter ids
     d1_id = cells[cell_id].daughters[0]
-    print('daughter 1')
-    print(d1_id)
     d2_id = cells[cell_id].daughters[1]
 
     # both daughters should have been born at the same time.
@@ -1228,10 +1226,10 @@ def check_growth_by_region(cell: cell.Cell, region) -> bool:
         True if it makes sense to grow the cell
     """
     # load parameters in ratios
-    max_growth_length = 2
-    min_growth_length = 0.9
-    max_growth_area = 2
-    min_growth_area = 0.9
+    max_growth_length = 1.3
+    min_growth_length = 0.8
+    max_growth_area = 1.3
+    min_growth_area = 0.8
 
     # check if length is not too much longer
     if cell.lengths[-1] * max_growth_length < region.major_axis_length:
