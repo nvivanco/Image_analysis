@@ -156,79 +156,87 @@ def segment_image(image,
     return labeled_image
 
 
-def display_segmentation(path_to_original_stack, mask_path, arr=None, start=0, end=20, alpha=0.5):
+def display_segmentation(path_to_original_stack, mask_path=None, alpha=0.5, cells_df=None, start=0, end=20):
 	# Check if files exist
 	if os.path.isfile(path_to_original_stack):
 		phase_stack = tifffile.imread(path_to_original_stack)
-	if os.path.isfile(mask_path):
-		mask_stack = tifffile.imread(mask_path)
 
-	final_mask = mask_stack[end, :, :]
-	total_number_labels = len(np.unique(final_mask))
+		num_images = len(range(start, end, 1))  # need to add a way to calculate images if numbers are not consecutive
 
-	number_of_colors_needed = max(20, total_number_labels)
-	# Get a colormap with  distinct colors, for potential cell labels
-	cmap = plt.cm.get_cmap('tab20', number_of_colors_needed)
-	# Create a dictionary mapping integers to hex color codes
-	color_dict = {}
-	for j in range(number_of_colors_needed + 1):
-		color = cmap(j)[:3]  # Extract RGB values
-		color_dict[j] = color
+		# Calculate figure size
+		figxsize = phase_stack.shape[2] * num_images / 100.0
+		figysize = phase_stack.shape[1] / 100.0
 
-	num_images = len(range(start, end, 1))  # need to add a way to calculate images if numbers are not consecutive
+		fig, axs = plt.subplots(nrows=1, ncols=num_images, figsize=(figxsize, figysize), facecolor="white",
+								edgecolor="black",
+								gridspec_kw={'wspace': 0, 'hspace': 0, 'left': 0, 'right': 1, 'top': 1, 'bottom': 0})
+		# Flatten the axs array for easier indexing
+		axs = axs.flatten()
+		color_dict = {}
 
-	# Calculate figure size
-	figxsize = phase_stack.shape[2] * num_images / 100.0
-	figysize = phase_stack.shape[1] / 100.0
+		if mask_path is not None:
+			if os.path.isfile(mask_path):
+				mask_stack = tifffile.imread(mask_path)
+				final_mask = mask_stack[end, :, :]
+				total_number_labels = len(np.unique(final_mask))
 
-	fig, axs = plt.subplots(nrows=1, ncols=num_images, figsize=(figxsize, figysize), facecolor="white",
-							edgecolor="black",
-							gridspec_kw={'wspace': 0, 'hspace': 0, 'left': 0, 'right': 1, 'top': 1, 'bottom': 0})
-	# Flatten the axs array for easier indexing
-	axs = axs.flatten()
+				number_of_colors_needed = max(20, total_number_labels)
+				# Get a colormap with  distinct colors, for potential cell labels
+				cmap = plt.cm.get_cmap('tab20', number_of_colors_needed)
+				# Create a dictionary mapping integers to hex color codes
+				for j in range(number_of_colors_needed + 1):
+					color = cmap(j)[:3]  # Extract RGB values
+					color_dict[j] = color
 
-	for i in range(start, end, 1):
-		phase = phase_stack[i, :, :]
-		mask = mask_stack[i, :, :]
-
-		if arr is None:
-			# Create a colormapped image
-			colored_mask = np.zeros((mask.shape[0], mask.shape[1], 3))
-			for x in range(mask.shape[0]):
-				for y in range(mask.shape[1]):
-					colored_mask[x, y] = color_dict[mask[x, y]]
-
-			# Access the specific subplot and plot the image
-			axs[i - start].imshow(phase, cmap='gray')
-			axs[i - start].imshow(colored_mask, alpha=alpha)
-			axs[i - start].set_yticks([])
-			axs[i - start].set_xticks([])
-			axs[i - start].set_xlabel(f"{i}", fontsize=8)
-
-
-		elif arr is not None:
-			time_frame = arr[arr[:, 0] == i]
-			y_f = time_frame[:, 1]
-			x_f = time_frame[:, 2]
-			if len(y_f) >= 1:
-				cell_coordinates = list(zip(x_f, y_f))
-				for loc in range(len(cell_coordinates)):
-					(x_loc, y_loc) = cell_coordinates[loc]
-					color = color_dict[loc + 1]
+				for i in range(start, end, 1):
+					phase = phase_stack[i, :, :]
+					mask = mask_stack[i, :, :]
+					# Create a colormapped image
+					colored_mask = np.zeros((mask.shape[0], mask.shape[1], 3))
+					for x in range(mask.shape[0]):
+						for y in range(mask.shape[1]):
+							colored_mask[x, y] = color_dict[mask[x, y]]
+					# Access the specific subplot and plot the image
 					axs[i - start].imshow(phase, cmap='gray')
-					axs[i - start].scatter(x_loc, y_loc, color=color, s=5)
+					axs[i - start].imshow(colored_mask, alpha=alpha)
 					axs[i - start].set_yticks([])
 					axs[i - start].set_xticks([])
 					axs[i - start].set_xlabel(f"{i}", fontsize=8)
+
+		elif cells_df is not None:
+			unique_cell_ids = cells_df['cell_id'].unique()
+			total_number_labels = len(unique_cell_ids)
+			number_of_colors_needed = max(20, total_number_labels)
+			# Get a colormap with  distinct colors, for potential cell labels
+			cmap = plt.cm.get_cmap('tab20', number_of_colors_needed)
+			# Create a dictionary mapping integers to hex color codes
+			for color_i, cell_id in enumerate(unique_cell_ids):
+				color = cmap(color_i)[:3]  # Extract RGB values
+				color_dict[cell_id] = color
+			for i in range(start, end, 1):
+				phase = phase_stack[i, :, :]
+				cells_time = cells_df[cells_df['time_index'] == i]
+				if len(cells_time) >= 1:
+					for index, cell in cells_time.iterrows():
+						(y_loc, x_loc) = cell['centroids']
+						color = color_dict[cell['cell_id']]
+						axs[i - start].imshow(phase, cmap='gray')
+						axs[i - start].scatter(x_loc, y_loc, color=color, s=5)
+						axs[i - start].set_yticks([])
+						axs[i - start].set_xticks([])
+						axs[i - start].set_xlabel(f"{i}", fontsize=8)
 			else:
-				axs[i - start].imshow(phase, cmap='gray')
-				axs[i - start].set_yticks([])
-				axs[i - start].set_xticks([])
-				axs[i - start].set_xlabel(f"{i}", fontsize=8)
+				for i in range(start, end, 1):
+					phase = phase_stack[i, :, :]
+					axs[i - start].imshow(phase, cmap='gray')
+					axs[i - start].set_yticks([])
+					axs[i - start].set_xticks([])
+					axs[i - start].set_xlabel(f"{i}", fontsize=8)
 
 	patches = []
-	for label, color in color_dict.items():
-		patches.append(mpatches.Patch(color=color, label=f"Label {label}"))
+	if len(color_dict.items()) >= 1:
+		for label, color in color_dict.items():
+			patches.append(mpatches.Patch(color=color, label=f"Label {label}"))
 	plt.legend(handles=patches, bbox_to_anchor=(1.05, 1), loc='upper left')
 	plt.show()
 
