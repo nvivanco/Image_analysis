@@ -548,7 +548,6 @@ def hyperstack_tif_tcyx(root_dir, experiment_name, c=0):
 			for channel, image_path in sorted(channels.items()):
 				new_filename = f'{experiment_name}_t{time:04.0f}xy{position}c{channel}.tif'
 				new_path = os.path.join(output_dir_path, new_filename)
-				print(new_path)
 				try:
 					# Copy the file to the new path
 					shutil.copy(str(image_path), str(new_path))
@@ -759,6 +758,7 @@ def apply_image_rotation(image_stack, rotation_angle):
 	if image_stack.ndim == 4:
 		h, w = image_stack.shape[2:]
 		center = (w // 2, h // 2)
+		print('Rotation angle:')
 		print(rotation_angle)
 		M = cv2.getRotationMatrix2D(center, rotation_angle, 1.0)
 		for time in range(image_stack.shape[0]):
