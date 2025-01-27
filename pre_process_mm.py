@@ -390,34 +390,51 @@ def midpoint_distance(line, center):
     distance = np.sqrt((midpoint_x - center[0])**2 + (midpoint_y - center[1])**2)
     return distance
 
-def crop_around_central_flow(h_lines, w, h, growth_channel_length=400):
-    threshold = 500  # Distance from center of image if using 1x1 binning in DuMM
+def crop_around_central_flow(h_lines, w, h, growth_channel_length=400, threshold=500, bottom_margin=0.9):
+    """
+    Crops an image around the central flow channel based on detected horizontal lines.
+
+    Args:
+        h_lines: A list of detected horizontal lines, where each line is represented
+                as a tuple of coordinates ((x1, y1), (x2, y2)).
+        w: Width of the image.
+        h: Height of the image.
+        growth_channel_length: Desired length of the cropped region along the flow channel.
+        threshold: Maximum distance of a line from the image center to be considered.
+        bottom_margin: Fraction of the image height to exclude from consideration
+                       for horizontal lines (e.g., 0.2 for 20% from the bottom).
+
+    Returns:
+        A tuple containing the start and end indices for cropping along the vertical axis
+        (y-axis) if lines are found, otherwise None.
+    """
+
     center_x, center_y = w // 2, h // 2
+    bottom_exclusion_height = int(h * bottom_margin)
+    bottom_final = h
+    filtered_lines = []
 
     if h_lines:
-        # Filter lines based on distance
-        filtered_lines = []
         for line in h_lines:
             distance = midpoint_distance(line, (center_x, center_y))
-            if distance <= threshold:
+            if distance <= threshold and line[0][1] < bottom_exclusion_height:
                 filtered_lines.append(line)
+            elif line[0][1] >= bottom_exclusion_height:
+                bottom_final = bottom_exclusion_height
+
         if filtered_lines:
             x1, y1, x2, y2 = filtered_lines[0][0]
 
-            # Determine crop boundaries
-            # Need to change if channels facing up or down
+            # Determine crop boundaries (adjust based on channel orientation)
             crop_start = max(y1, 0)
-            crop_end = min(y1 + growth_channel_length, h)
+            crop_end = min(y1 + growth_channel_length, bottom_final)
 
-            print('Cropping reference image')
             return crop_start, crop_end
         else:
-            print('lines along central flow channel not found, '
-				  'consider changing distance threshold from center '
-				  'of the image. This changes with different binning options')
+            print(f"No lines found within {threshold} pixels from the center and above the bottom margin.")
             return None
     else:
-        print('lines were not found in image')
+        print("No horizontal lines were detected in the image.")
         return None
 
 def rotate_stack(path_to_stack, c=0, growth_channel_length=400):
@@ -461,9 +478,11 @@ def rotate_stack(path_to_stack, c=0, growth_channel_length=400):
 
 		# Identify lines in the rotated image
 		rot_horizontal_lines, rot_vertical_lines = id_lines(ref_rotated_image)
+		# find spot
+		plot_lines(ref_rotated_image, rot_horizontal_lines)
 
 		# Crop around the central flow
-		crop_start, crop_end = crop_around_central_flow(rot_horizontal_lines, w, h, growth_channel_length)
+		crop_start, crop_end = crop_around_central_flow(rot_horizontal_lines, w, h, growth_channel_length, 500)
 
 		# Rotate and crop the entire stack
 		rotated_stack = apply_image_rotation(stacked_img, rotation_angle)
@@ -663,26 +682,6 @@ def unstack_tcyx_to_cyx(path_to_hyperstacked):
 							tifffile.imwrite(str(output_yx_file), yx_image)
 
 
-def plot_lines_across_FOVs(path_to_stack, c=0):
-	"""Args:
-	path_to_stack: Path to stack of cyx format files, in string format
-	c: Phase channel index in integer format, default = 0
-	Output is a series of plotted images with identified
-	horizontal or vertical lines across FOVs/positions
-	"""
-	file_groups = org_by_timepoint([path_to_stack])
-
-	for position in file_groups.keys():
-		earliest_timepoint = min(file_groups[position].keys())
-		first_file_path = file_groups[position][earliest_timepoint]['stacked']
-		ref_img = tifffile.imread(first_file_path)
-		ref_phase_img = ref_img[c, :, :]
-		horizontal_lines, vertical_lines = id_lines(ref_phase_img)
-		print('Lines identified in FOV ' + position)
-		print('Horizontal lines')
-		plot_lines(ref_phase_img, horizontal_lines)
-
-
 def calculate_line_angle(x1, y1, x2, y2):
 	dx = x2 - x1
 	dy = y2 - y1
@@ -742,7 +741,7 @@ def plot_lines(original_img, lines):
 
 
 def apply_image_rotation(image_stack, rotation_angle):
-	"""Applies rotation to an image stacked as cyx.
+	"""Applies rotation to an image stacked as tcyx.
 
 	Args:
 		image: image in Grey or BGR format for OpenCV
