@@ -390,7 +390,7 @@ def midpoint_distance(line, center):
     distance = np.sqrt((midpoint_x - center[0])**2 + (midpoint_y - center[1])**2)
     return distance
 
-def crop_around_central_flow(h_lines, w, h, growth_channel_length=400, threshold=500, bottom_margin=0.9):
+def crop_around_central_flow(h_lines, w, h, growth_channel_length=400, threshold=300, bottom_margin=0.9):
     """
     Crops an image around the central flow channel based on detected horizontal lines.
 
@@ -437,7 +437,7 @@ def crop_around_central_flow(h_lines, w, h, growth_channel_length=400, threshold
         print("No horizontal lines were detected in the image.")
         return None
 
-def rotate_stack(path_to_stack, c=0, growth_channel_length=400):
+def rotate_stack(path_to_stack, c=0, growth_channel_length=400, closed_ends = 'down'):
 	"""Rotates and crops a stack of cyx or tcyx format files.
 
 	Args:
@@ -469,23 +469,23 @@ def rotate_stack(path_to_stack, c=0, growth_channel_length=400):
 		# Find lines in the reference phase image
 		h, w = ref_phase_img.shape
 		horizontal_lines, vertical_lines = id_lines(ref_phase_img)
+		plot_lines(ref_phase_img, horizontal_lines)
 
 		# Calculate rotation angle
 		rotation_angle = calculate_rotation_angle(horizontal_lines)
 
 		# Apply image rotation
-		ref_rotated_image = apply_image_rotation(ref_phase_img, rotation_angle)
+		ref_rotated_image = apply_image_rotation(ref_phase_img, rotation_angle, closed_ends)
 
 		# Identify lines in the rotated image
 		rot_horizontal_lines, rot_vertical_lines = id_lines(ref_rotated_image)
 		# find spot
-		plot_lines(ref_rotated_image, rot_horizontal_lines)
 
 		# Crop around the central flow
 		crop_start, crop_end = crop_around_central_flow(rot_horizontal_lines, w, h, growth_channel_length, 500)
 
 		# Rotate and crop the entire stack
-		rotated_stack = apply_image_rotation(stacked_img, rotation_angle)
+		rotated_stack = apply_image_rotation(stacked_img, rotation_angle, closed_ends)
 		cropped_stack = rotated_stack[:, :, crop_start:crop_end, :]
 
 		# Visualize the cropped stack (optional)
@@ -604,7 +604,7 @@ def drift_correction_napari(hyperstacked_path):
 				# multi-channel 2D-movie
 				cd = CorrectDrift(dims="tcyx", data=hyperstacked_img)
 				# estimate drift table
-				drifts = cd.estimate_drift(t0=0, channel=0, increment=1, upsample_factor=100, mode='relative')
+				drifts = cd.estimate_drift(t0=0, channel=0, increment=1, upsample_factor=15, mode='relative')
 				# correct drift
 				img_cor = cd.apply_drifts(drifts)
 				img_cor_file = Path(output_dir_path) / f"drift_cor_{experiment}_xy{position}.tif"
@@ -740,12 +740,14 @@ def plot_lines(original_img, lines):
 	plt.show()
 
 
-def apply_image_rotation(image_stack, rotation_angle):
+def apply_image_rotation(image_stack, rotation_angle, closed_ends = 'down'):
 	"""Applies rotation to an image stacked as tcyx.
 
 	Args:
 		image: image in Grey or BGR format for OpenCV
 		rotation_angle: The rotation angle in degrees.
+		closed_ends: orientation of closed ends of growth channels,
+		can be "up" or "down"
 
 	Returns:
 		Rotated image in BGR format.
@@ -753,13 +755,18 @@ def apply_image_rotation(image_stack, rotation_angle):
 	rotated_stack = np.zeros_like(image_stack)
 	h = None
 	w = None
+	adjusting_angle = 0
+	if closed_ends == 'up':
+		adjusting_angle = 180
+
+
 	# assumes tcyx format
 	if image_stack.ndim == 4:
 		h, w = image_stack.shape[2:]
 		center = (w // 2, h // 2)
 		print('Rotation angle:')
 		print(rotation_angle)
-		M = cv2.getRotationMatrix2D(center, rotation_angle, 1.0)
+		M = cv2.getRotationMatrix2D(center, rotation_angle-adjusting_angle, 1.0)
 		for time in range(image_stack.shape[0]):
 			for channel in range(image_stack.shape[1]):
 				rotated_stack[time, channel] = cv2.warpAffine(image_stack[time, channel], M, (w, h))
@@ -767,14 +774,14 @@ def apply_image_rotation(image_stack, rotation_angle):
 	elif image_stack.ndim == 3:
 		h, w = image_stack.shape[1:]
 		center = (w // 2, h // 2)
-		M = cv2.getRotationMatrix2D(center, rotation_angle, 1.0)
+		M = cv2.getRotationMatrix2D(center, rotation_angle-adjusting_angle, 1.0)
 		for channel in range(image_stack.shape[0]):
 			rotated_stack[channel] = cv2.warpAffine(image_stack[channel], M, (w, h))
 
 	elif image_stack.ndim == 2:
 		h, w = image_stack.shape
 		center = (w // 2, h // 2)
-		M = cv2.getRotationMatrix2D(center, rotation_angle, 1.0)
+		M = cv2.getRotationMatrix2D(center, rotation_angle-adjusting_angle, 1.0)
 		rotated_stack = cv2.warpAffine(image_stack, M, (w, h))
 
 	return rotated_stack
