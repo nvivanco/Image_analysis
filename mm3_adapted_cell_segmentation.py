@@ -5,9 +5,10 @@ import tifffile
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import warnings
-from skimage import segmentation, morphology
+from skimage import segmentation, morphology, measure
 from skimage.filters import threshold_otsu
 from scipy import ndimage as ndi
+import networkx as nx
 
 def segment_chnl_stack(path_to_phase_channel_stack,
 					   output_path,
@@ -15,7 +16,10 @@ def segment_chnl_stack(path_to_phase_channel_stack,
 					   first_opening=5,
 					   distance_threshold=3,
 					   second_opening_size=1,
-					   min_object_size=5):
+					   min_object_size=5,
+					   min_cell_area=200,
+					   max_cell_area=700,
+					   small_merge_area_threshold=50):
 	"""
 	For a given fov and peak (channel), do segmentation for all images in the
 	subtracted .tif stack.
@@ -38,7 +42,10 @@ def segment_chnl_stack(path_to_phase_channel_stack,
 											first_opening,
 											distance_threshold,
 											second_opening_size,
-											min_object_size)
+											min_object_size,
+											min_cell_area,
+											max_cell_area,
+											small_merge_area_threshold)
 
 		unstacked_seg_image = unstacked_seg_image.astype("uint8")
 		unstacked_seg_filename = f'mask{time:03d}.tiff'
@@ -58,106 +65,113 @@ def segment_chnl_stack(path_to_phase_channel_stack,
 
 def segment_image(image,
                   OTSU_threshold=1.5,
-                  first_opening = 5,
+                  first_opening=5,
                   distance_threshold=3,
                   second_opening_size=1,
-                  min_object_size=5):
-    """
-    Adapted From OTSU segementation on napari-mm3, morph uses diagonal footprint
-    Segments a subtracted image and returns a labeled image
+                  min_object_size=5,
+                  min_cell_area=200,
+                  max_cell_area=700,
+                  small_merge_area_threshold=50):
+    """Segments an image with size filtering and improved structure."""
 
-    Parameters
-    ----------
-    image : a ndarray which is an image. This should be the subtracted image
-
-    Returns
-    -------
-    labeled_image : a ndarray which is also an image. Labeled values, which
-        should correspond to cells, all have the same integer value starting with 1.
-        Non labeled area should have value zero.
-    """
-
-    # threshold image
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            thresh = threshold_otsu(image)  # finds optimal OTSU threshhold value
+            thresh = threshold_otsu(image)
     except:
         return np.zeros_like(image)
 
-    threshholded = image > OTSU_threshold * thresh  # will create binary image
+    thresholded = image > OTSU_threshold * thresh
 
-    # Opening = erosion then dialation.
-    # opening smooths images, breaks isthmuses, and eliminates protrusions.
-    # "opens" dark gaps between bright features.
-    # Create a diagonal line-shaped footprint
-    diagonal_footprint = np.zeros((first_opening, first_opening))
-    np.fill_diagonal(diagonal_footprint, 1)
+    morph = morphology.binary_opening(thresholded, morphology.disk(first_opening))
 
-    morph = morphology.binary_opening(threshholded, diagonal_footprint)
-
-    # if this image is empty at this point (likely if there were no cells), just return
-    # zero array
     if np.amax(morph) == 0:
         return np.zeros_like(image)
 
-    ### Calculate distance matrix, use as markers for random walker (diffusion watershed)
-    # Generate the markers based on distance to the background
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        distance = ndi.distance_transform_edt(morph)
+    distance = ndi.distance_transform_edt(morph)
 
-    # threshold distance image
-    distance_thresh = np.zeros_like(distance)
-    distance_thresh[distance < distance_threshold] = 0
-    distance_thresh[distance >= distance_threshold] = 1
+    distance_thresh = distance >= distance_threshold
 
-    # do an extra opening on the distance
-    distance_opened = morphology.binary_opening(
-        distance_thresh, morphology.disk(second_opening_size)
-    )
+    distance_opened = morphology.binary_opening(distance_thresh, morphology.disk(second_opening_size))
 
-    # remove artifacts connected to image border
     cleared = segmentation.clear_border(distance_opened)
-    # remove small objects. Remove small objects wants a
-    # labeled image and will fail if there is only one label. Return zero image in that case
-    # could have used try/except but remove_small_objects loves to issue warnings.
-    labeled, label_num = morphology.label(cleared, connectivity=1, return_num=True)
-    if label_num > 1:
-        labeled = morphology.remove_small_objects(labeled, min_size=min_object_size)
-    else:
-        # if there are no labels, then just return the cleared image as it is zero
+
+    labeled, num_labels = morphology.label(cleared, connectivity=1, return_num=True)
+
+    if num_labels == 0:
         return np.zeros_like(image)
 
-    # relabel now that small objects and labels on edges have been cleared
+    labeled = morphology.remove_small_objects(labeled, min_size=min_object_size)
+
     markers = morphology.label(labeled, connectivity=1)
 
-    # just break if there is no label
     if np.amax(markers) == 0:
         return np.zeros_like(image)
 
-    # the binary image for the watershed, which uses the unmodified OTSU threshold
-    threshholded_watershed = threshholded
-    # threshholded_watershed = segmentation.clear_border(threshholded_watershed)
+    thresholded_watershed = thresholded
 
-    # label using the random walker (diffusion watershed) algorithm
     try:
-        # set anything outside of OTSU threshold to -1 so it will not be labeled
-        markers[threshholded_watershed == 0] = -1
-        # here is the main algorithm
+        markers[thresholded_watershed == 0] = -1
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             labeled_image = segmentation.random_walker(-1 * image, markers)
-        # put negative values back to zero for proper image
         labeled_image[labeled_image == -1] = 0
     except:
         return np.zeros_like(image)
 
+    # Bounding Box Merging
+    regions = measure.regionprops(labeled_image)
+    if regions:
+        bboxes = np.array([region.bbox for region in regions])
+        areas = np.array([region.area for region in regions])
+        graph = nx.Graph()
+        for i, bbox1 in enumerate(bboxes):
+            for j, bbox2 in enumerate(bboxes):
+                if i != j and overlap(bbox1, bbox2) and areas[i] < small_merge_area_threshold and areas[j] < small_merge_area_threshold:
+                    print('merge regions')
+                    graph.add_edge(regions[i].label, regions[j].label)
+
+        # Find connected components (merged regions)
+        for component in nx.connected_components(graph):
+            if len(component) > 1:  # Only merge if there's more than one region
+                merged_mask = np.isin(labeled_image, list(component))
+                new_label = np.max(labeled_image) + 1
+                labeled_image[merged_mask] = new_label
+
+                for label in component:
+                    labeled_image[labeled_image == label] = 0
+
+        # Relabel after merging
+        labeled_image, num_labels = morphology.label(labeled_image, connectivity=1, return_num=True)
+
+
+    # Size Filtering
+    if min_cell_area is not None or max_cell_area is not None:
+        filtered_labeled_image = np.zeros_like(labeled_image)
+        regions = measure.regionprops(labeled_image)
+        for region in regions:
+            area = region.area
+            if (min_cell_area is None or area >= min_cell_area) and (max_cell_area is None or area <= max_cell_area):
+                filtered_labeled_image[region.coords[:, 0], region.coords[:, 1]] = region.label
+
+        labeled_image = filtered_labeled_image
+
     return labeled_image
 
+def overlap(bbox1, bbox2):
+    """Checks if two bounding boxes overlap."""
+    x1 = max(bbox1[0], bbox2[0])
+    y1 = max(bbox1[1], bbox2[1])
+    x2 = min(bbox1[2], bbox2[2])
+    y2 = min(bbox1[3], bbox2[3])
+    return x1 < x2 and y1 < y2
 
-def display_segmentation(path_to_original_stack, mask_path=None, alpha=0.5, cells_df=None, start=0, end=20):
+def display_segmentation(path_to_original_stack, fov_id, peak_id, mask_path=None, alpha=0.5, cells_df=None, start=0, end=20):
 	# Check if files exist
+	# plotting lineage trees for complete cells
+	general_dir = os.path.dirname(path_to_original_stack)
+	plot_out_dir = os.path.join(general_dir, 'kymographs')
+	os.makedirs(plot_out_dir, exist_ok=True)
 	if os.path.isfile(path_to_original_stack):
 		phase_stack = tifffile.imread(path_to_original_stack)
 
@@ -173,8 +187,27 @@ def display_segmentation(path_to_original_stack, mask_path=None, alpha=0.5, cell
 		# Flatten the axs array for easier indexing
 		axs = axs.flatten()
 		color_dict = {}
+		kymographs_gray = []
 
-		if mask_path is not None:
+		if mask_path is None and cells_df is None:
+			for i in range(start, end, 1):
+				phase = phase_stack[i, :, :]
+				axs[i - start].imshow(phase, cmap='gray')
+				axs[i - start].set_yticks([])
+				axs[i - start].set_xticks([])
+				# axs[i - start].set_xlabel(f"{i}", fontsize=8)
+				if phase.ndim == 3:  # Check if it is an RGB image
+					kymograph_gray = np.mean(phase, axis=2)  # Average across color channels
+				else:
+					kymograph_gray = phase  # If it's already grayscale, just copy
+				kymographs_gray.append(kymograph_gray)
+			combined_kymograph = np.concatenate(kymographs_gray, axis=1)  # Concatenate horizontally
+			lin_filename = f'{fov_id}_{peak_id}.tif'
+			lin_filepath = os.path.join(plot_out_dir, lin_filename)
+			tifffile.imwrite(lin_filepath, combined_kymograph)
+
+
+		elif mask_path is not None:
 			if os.path.isfile(mask_path):
 				mask_stack = tifffile.imread(mask_path)
 				final_mask = mask_stack[end, :, :]
@@ -225,20 +258,16 @@ def display_segmentation(path_to_original_stack, mask_path=None, alpha=0.5, cell
 						axs[i - start].set_yticks([])
 						axs[i - start].set_xticks([])
 						axs[i - start].set_xlabel(f"{i}", fontsize=8)
-			else:
-				for i in range(start, end, 1):
-					phase = phase_stack[i, :, :]
-					axs[i - start].imshow(phase, cmap='gray')
-					axs[i - start].set_yticks([])
-					axs[i - start].set_xticks([])
-					axs[i - start].set_xlabel(f"{i}", fontsize=8)
 
 	patches = []
 	if len(color_dict.items()) >= 1:
 		for label, color in color_dict.items():
 			patches.append(mpatches.Patch(color=color, label=f"Label {label}"))
 	plt.legend(handles=patches, bbox_to_anchor=(1.05, 1), loc='upper left')
-	plt.show()
+
+	plt.show(fig)
+	plt.close(fig)
+
 
 def read_celltk_masks(path):
     file_groups = {}
