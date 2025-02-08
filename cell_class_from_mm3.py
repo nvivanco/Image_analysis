@@ -6,7 +6,7 @@ from scipy import ndimage as ndi
 # this is the object that holds all information for a cell
 class Cell:
 	# initialize (birth) the cell
-	def __init__(self, pxl2um, time_table, cell_id, region, t, parent_id=None):
+	def __init__(self, pxl2um, cell_id, region, t, parent_id=None):
 		"""The cell must be given a unique cell_id and passed the region
 		information from the segmentation
 
@@ -35,9 +35,9 @@ class Cell:
 		# create all the attributes
 		# id
 		self.id = cell_id
+		self.is_active = True
 
 		self.pxl2um = pxl2um
-		self.time_table = time_table
 
 		# identification convenience
 		self.fov = int(cell_id.split("f")[1].split("p")[0])
@@ -56,11 +56,12 @@ class Cell:
 		self.division_time = None  # filled out if cell divides
 
 		# the following information is on a per timepoint basis
+		self.regions = [region]
 		self.times = [t]
-		self.abs_times = [time_table[self.fov][t]]  # elapsed time in seconds
 		self.labels = [region.label]
 		self.bboxes = [region.bbox]
 		self.areas = [region.area]
+		self.eccentricity = [region.eccentricity]
 
 		# calculating cell length and width by using Feret Diamter. These values are in pixels
 		length_tmp, width_tmp = feretdiameter(region)
@@ -95,21 +96,19 @@ class Cell:
 		self.sb = None  # in um
 		self.sd = None  # this should be combined lengths of daughters, in um
 		self.delta = None
-		self.tau = None
-		self.elong_rate = None
 		self.septum_position = None
 		self.width = None
 
-	def grow(self, time_table, region, t):
+	def grow(self, region, t):
 		"""Append data from a region to this cell.
 		use cell.times[-1] to get most current value"""
 
 		self.times.append(t)
-		# TODO: Switch time_table to be passed in directly.
-		self.abs_times.append(time_table[self.fov][t])
+		self.regions.append(region)
 		self.labels.append(region.label)
 		self.bboxes.append(region.bbox)
 		self.areas.append(region.area)
+		self.eccentricity.append(region.eccentricity)
 
 		# calculating cell length and width by using Feret Diamter
 		length_tmp, width_tmp = feretdiameter(region)
@@ -136,14 +135,13 @@ class Cell:
 		daughter1 is the daugther closer to the closed end."""
 
 		# put the daugther ids into the cell
-		self.daughters = [daughter1.id, daughter2.id]
+		self.daughters = (daughter1.id, daughter2.id)
 
 		# give this guy a division time
 		self.division_time = daughter1.birth_time
 
 		# update times
 		self.times_w_div = self.times + [self.division_time]
-		self.abs_times.append(self.time_table[self.fov][self.division_time])
 
 		# flesh out the stats for this cell
 		# size at birth
@@ -154,9 +152,6 @@ class Cell:
 
 		# delta is here for convenience
 		self.delta = self.sd - self.sb
-
-		# generation time. Use more accurate times and convert to minutes
-		self.tau = np.float64((self.abs_times[-1] - self.abs_times[0]) / 60.0)
 
 		# include the data points from the daughters
 		self.lengths_w_div = [l * self.pxl2um for l in self.lengths] + [self.sd]
@@ -173,18 +168,6 @@ class Cell:
 				* (self.widths_w_div[i] / 2) ** 2
 				+ (4 / 3) * np.pi * (self.widths_w_div[i] / 2) ** 3
 			)
-
-		# calculate elongation rate.
-
-		try:
-			times = np.float64((np.array(self.abs_times) - self.abs_times[0]) / 60.0)
-			log_lengths = np.float64(np.log(self.lengths_w_div))
-			p = np.polyfit(times, log_lengths, 1)  # this wants float64
-			self.elong_rate = p[0] * 60.0  # convert to hours
-
-		except:
-			self.elong_rate = np.float64("NaN")
-			print("Elongation rate calculate failed for {}.".format(self.id))
 
 		# calculate the septum position as a number between 0 and 1
 		# which indicates the size of daughter closer to the closed end
@@ -203,8 +186,6 @@ class Cell:
 		self.sb = self.sb.astype(convert_to)
 		self.sd = self.sd.astype(convert_to)
 		self.delta = self.delta.astype(convert_to)
-		self.elong_rate = self.elong_rate.astype(convert_to)
-		self.tau = self.tau.astype(convert_to)
 		self.septum_position = self.septum_position.astype(convert_to)
 		self.width = self.width.astype(convert_to)
 
@@ -268,188 +249,88 @@ class dotdict(dict):
     __setattr__ = dict.__setitem__
     __delattr__ = dict.__delitem__
 
-# obtains cell length and width of the cell using the feret diameter
+
 def feretdiameter(region):
+    """Calculates cell length and width using Feret diameter.
+
+    Args:
+        region: skimage.measure._regionprops._RegionProperties object.
+
+    Returns:
+        length: float, length of the cell (or None if error).
+        width: float, width of the cell (or None if error).
     """
-    feretdiameter calculates the length and width of the binary region shape. The cell orientation
-    from the ellipsoid is used to find the major and minor axis of the cell.
-    See https://en.wikipedia.org/wiki/Feret_diameter.
-
-    Parameters
-    ----------
-    region : skimage.measure._regionprops._RegionProperties
-        regionprops object of the binary region of the cell
-
-    Returns
-    -------
-    length : float
-        length of the cell
-    width : float
-        width of the cell
-    """
-
-    # y: along vertical axis of the image; x: along horizontal axis of the image;
-    # calculate the relative centroid in the bounding box (non-rotated)
-    # print(region.centroid)
-    y0, x0 = region.centroid
-    y0 = y0 - np.int16(region.bbox[0]) + 1
-    x0 = x0 - np.int16(region.bbox[1]) + 1
-
-    # orientation is now measured in RC coordinates - quick fix to convert
-    # back to xy
-    if region.orientation > 0:
-        ori1 = -np.pi / 2 + region.orientation
-    else:
-        ori1 = np.pi / 2 + region.orientation
-    cosorient = np.cos(ori1)
-    sinorient = np.sin(ori1)
-
-    amp_param = (
-        1.2  # amplifying number to make sure the axis is longer than actual cell length
-    )
-
-    # coordinates relative to bounding box
-    # r_coords = region.coords - [np.int16(region.bbox[0]), np.int16(region.bbox[1])]
-
-    # limit to perimeter coords. pixels are relative to bounding box
-    region_binimg = np.pad(
-        region.image, 1, "constant"
-    )  # pad region binary image by 1 to avoid boundary non-zero pixels
-    distance_image = ndi.distance_transform_edt(region_binimg)
-    r_coords = np.where(distance_image == 1)
-    r_coords = list(zip(r_coords[0], r_coords[1]))
-
-    # coordinates are already sorted by y. partion into top and bottom to search faster later
-    # if orientation > 0, L1 is closer to top of image (lower Y coord)
-    if (ori1) > 0:
-        L1_coords = r_coords[: int(np.round(len(r_coords) / 4))]
-        L2_coords = r_coords[int(np.round(len(r_coords) / 4)) :]
-    else:
-        L1_coords = r_coords[int(np.round(len(r_coords) / 4)) :]
-        L2_coords = r_coords[: int(np.round(len(r_coords) / 4))]
-
-    #####################
-    # calculte cell length
-    L1_pt = np.zeros((2, 1))
-    L2_pt = np.zeros((2, 1))
-
-    # define the two end points of the the long axis line
-    # one pole.
-    L1_pt[1] = x0 + cosorient * 0.5 * region.major_axis_length * amp_param
-    L1_pt[0] = y0 - sinorient * 0.5 * region.major_axis_length * amp_param
-
-    # the other pole.
-    L2_pt[1] = x0 - cosorient * 0.5 * region.major_axis_length * amp_param
-    L2_pt[0] = y0 + sinorient * 0.5 * region.major_axis_length * amp_param
-
-    # calculate the minimal distance between the points at both ends of 3 lines
-    # aka calcule the closest coordiante in the region to each of the above points.
-    # pt_L1 = r_coords[np.argmin([np.sqrt(np.power(Pt[0]-L1_pt[0],2) + np.power(Pt[1]-L1_pt[1],2)) for Pt in r_coords])]
-    # pt_L2 = r_coords[np.argmin([np.sqrt(np.power(Pt[0]-L2_pt[0],2) + np.power(Pt[1]-L2_pt[1],2)) for Pt in r_coords])]
 
     try:
-        pt_L1 = L1_coords[
-            np.argmin(
-                [
-                    np.sqrt(
-                        np.power(Pt[0] - L1_pt[0], 2) + np.power(Pt[1] - L1_pt[1], 2)
-                    )
-                    for Pt in L1_coords
-                ]
-            )
-        ]
-        pt_L2 = L2_coords[
-            np.argmin(
-                [
-                    np.sqrt(
-                        np.power(Pt[0] - L2_pt[0], 2) + np.power(Pt[1] - L2_pt[1], 2)
-                    )
-                    for Pt in L2_coords
-                ]
-            )
-        ]
-        length = np.sqrt(
-            np.power(pt_L1[0] - pt_L2[0], 2) + np.power(pt_L1[1] - pt_L2[1], 2)
-        )
-    except:
+        y0, x0 = region.centroid
+        y0 = y0 - region.bbox[0] + 1  # Relative to bounding box
+        x0 = x0 - region.bbox[1] + 1
+
+        ori1 = -np.pi / 2 + region.orientation if region.orientation > 0 else np.pi / 2 + region.orientation
+        cosorient = np.cos(ori1)
+        sinorient = np.sin(ori1)
+
+        amp_param = 1.2
+
+        region_binimg = np.pad(region.image, 1, "constant")
+        distance_image = ndi.distance_transform_edt(region_binimg)
+        r_coords = np.argwhere(distance_image == 1)  # More efficient way to get coordinates
+
+        if ori1 > 0:
+            L1_coords = r_coords[: len(r_coords) // 4]
+            L2_coords = r_coords[len(r_coords) // 4:]
+        else:
+            L1_coords = r_coords[len(r_coords) // 4:]
+            L2_coords = r_coords[: len(r_coords) // 4]
+
+        # Length calculation (more efficient)
+        L1_pt = np.array([y0 - sinorient * 0.5 * region.major_axis_length * amp_param,
+                          x0 + cosorient * 0.5 * region.major_axis_length * amp_param])
+        L2_pt = np.array([y0 + sinorient * 0.5 * region.major_axis_length * amp_param,
+                          x0 - cosorient * 0.5 * region.major_axis_length * amp_param])
+
+        L1_dists_sq = np.sum((L1_coords - L1_pt)**2, axis=1)  # Use numpy broadcasting
+        L2_dists_sq = np.sum((L2_coords - L2_pt)**2, axis=1)
+        pt_L1_idx = np.argmin(L1_dists_sq)
+        pt_L2_idx = np.argmin(L2_dists_sq)
+        pt_L1 = L1_coords[pt_L1_idx]
+        pt_L2 = L2_coords[pt_L2_idx]
+        length = np.sqrt(L1_dists_sq[pt_L1_idx]) + np.sqrt(L2_dists_sq[pt_L2_idx])
+
+
+        # Width calculation (more efficient)
+        W_coords = [r_coords[: len(r_coords) // 2], r_coords[len(r_coords) // 2:]] if ori1 > 0 else \
+                   [r_coords[len(r_coords) // 2:], r_coords[: len(r_coords) // 2]]
+
+        x1 = x0 + cosorient * 0.5 * length * 0.4
+        y1 = y0 - sinorient * 0.5 * length * 0.4
+        x2 = x0 - cosorient * 0.5 * length * 0.4
+        y2 = y0 + sinorient * 0.5 * length * 0.4
+
+        W1_pts = np.array([[y1 - cosorient * 0.5 * region.minor_axis_length * amp_param,
+                           x1 - sinorient * 0.5 * region.minor_axis_length * amp_param],
+                          [y2 - cosorient * 0.5 * region.minor_axis_length * amp_param,
+                           x2 - sinorient * 0.5 * region.minor_axis_length * amp_param]])
+
+        W2_pts = np.array([[y1 + cosorient * 0.5 * region.minor_axis_length * amp_param,
+                           x1 + sinorient * 0.5 * region.minor_axis_length * amp_param],
+                          [y2 + cosorient * 0.5 * region.minor_axis_length * amp_param,
+                           x2 + sinorient * 0.5 * region.minor_axis_length * amp_param]])
+
+        d_W = []
+        for i in range(2):
+            W1_dists_sq = np.sum((W_coords[i] - W1_pts[i])**2, axis=1)
+            W2_dists_sq = np.sum((W_coords[i] - W2_pts[i])**2, axis=1)
+            pt_W1_idx = np.argmin(W1_dists_sq)
+            pt_W2_idx = np.argmin(W2_dists_sq)
+            d_W.append(np.sqrt(W1_dists_sq[pt_W1_idx]) + np.sqrt(W2_dists_sq[pt_W2_idx]))
+
+
+        width = np.mean(d_W)
+
+    except (IndexError, ValueError, TypeError) as e:  # More specific exceptions
+        print(f"Error in feretdiameter for region label {getattr(region, 'label', 'N/A')}: {e}") #Handles regions without label
         length = None
+        width = None
 
-    #####################
-    # calculate cell width
-    # draw 2 parallel lines along the short axis line spaced by 0.8*quarter of length = 0.4, to avoid  in midcell
-
-    # limit to points in each half
-    W_coords = []
-    if (ori1) > 0:
-        W_coords.append(
-            r_coords[: int(np.round(len(r_coords) / 2))]
-        )  # note the /2 here instead of /4
-        W_coords.append(r_coords[int(np.round(len(r_coords) / 2)):])
-    else:
-        W_coords.append(r_coords[int(np.round(len(r_coords) / 2)):])
-        W_coords.append(r_coords[: int(np.round(len(r_coords) / 2))])
-
-    # starting points
-    x1 = x0 + cosorient * 0.5 * length * 0.4
-    y1 = y0 - sinorient * 0.5 * length * 0.4
-    x2 = x0 - cosorient * 0.5 * length * 0.4
-    y2 = y0 + sinorient * 0.5 * length * 0.4
-    W1_pts = np.zeros((2, 2))
-    W2_pts = np.zeros((2, 2))
-
-    # now find the ends of the lines
-    # one side
-    W1_pts[0, 1] = x1 - sinorient * 0.5 * region.minor_axis_length * amp_param
-    W1_pts[0, 0] = y1 - cosorient * 0.5 * region.minor_axis_length * amp_param
-    W1_pts[1, 1] = x2 - sinorient * 0.5 * region.minor_axis_length * amp_param
-    W1_pts[1, 0] = y2 - cosorient * 0.5 * region.minor_axis_length * amp_param
-
-    # the other side
-    W2_pts[0, 1] = x1 + sinorient * 0.5 * region.minor_axis_length * amp_param
-    W2_pts[0, 0] = y1 + cosorient * 0.5 * region.minor_axis_length * amp_param
-    W2_pts[1, 1] = x2 + sinorient * 0.5 * region.minor_axis_length * amp_param
-    W2_pts[1, 0] = y2 + cosorient * 0.5 * region.minor_axis_length * amp_param
-
-    # calculate the minimal distance between the points at both ends of 3 lines
-    pt_W1 = np.zeros((2, 2))
-    pt_W2 = np.zeros((2, 2))
-    d_W = np.zeros((2, 1))
-    i = 0
-    for W1_pt, W2_pt in zip(W1_pts, W2_pts):
-
-        # # find the points closest to the guide points
-        # pt_W1[i,0], pt_W1[i,1] = r_coords[np.argmin([np.sqrt(np.power(Pt[0]-W1_pt[0],2) + np.power(Pt[1]-W1_pt[1],2)) for Pt in r_coords])]
-        # pt_W2[i,0], pt_W2[i,1] = r_coords[np.argmin([np.sqrt(np.power(Pt[0]-W2_pt[0],2) + np.power(Pt[1]-W2_pt[1],2)) for Pt in r_coords])]
-
-        # find the points closest to the guide points
-        pt_W1[i, 0], pt_W1[i, 1] = W_coords[i][
-            np.argmin(
-                [
-                    np.sqrt(
-                        np.power(Pt[0] - W1_pt[0], 2) + np.power(Pt[1] - W1_pt[1], 2)
-                    )
-                    for Pt in W_coords[i]
-                ]
-            )
-        ]
-        pt_W2[i, 0], pt_W2[i, 1] = W_coords[i][
-            np.argmin(
-                [
-                    np.sqrt(
-                        np.power(Pt[0] - W2_pt[0], 2) + np.power(Pt[1] - W2_pt[1], 2)
-                    )
-                    for Pt in W_coords[i]
-                ]
-            )
-        ]
-
-        # calculate the actual width
-        d_W[i] = np.sqrt(
-            np.power(pt_W1[i, 0] - pt_W2[i, 0], 2)
-            + np.power(pt_W1[i, 1] - pt_W2[i, 1], 2)
-        )
-        i += 1
-
-    # take the average of the two at quarter positions
-    width = np.mean([d_W[0], d_W[1]])
     return length, width
