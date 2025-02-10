@@ -2,8 +2,6 @@ import os
 import re
 import numpy as np
 import tifffile
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 import warnings
 from skimage import segmentation, morphology, measure
 from skimage.filters import threshold_otsu
@@ -165,108 +163,6 @@ def overlap(bbox1, bbox2):
     x2 = min(bbox1[2], bbox2[2])
     y2 = min(bbox1[3], bbox2[3])
     return x1 < x2 and y1 < y2
-
-def display_segmentation(path_to_original_stack, fov_id, peak_id, mask_path=None, alpha=0.5, cells_df=None, start=0, end=20):
-	# Check if files exist
-	# plotting lineage trees for complete cells
-	general_dir = os.path.dirname(path_to_original_stack)
-	plot_out_dir = os.path.join(general_dir, 'kymographs')
-	os.makedirs(plot_out_dir, exist_ok=True)
-	if os.path.isfile(path_to_original_stack):
-		phase_stack = tifffile.imread(path_to_original_stack)
-
-		num_images = len(range(start, end, 1))  # need to add a way to calculate images if numbers are not consecutive
-
-		# Calculate figure size
-		figxsize = phase_stack.shape[2] * num_images / 100.0
-		figysize = phase_stack.shape[1] / 100.0
-
-		fig, axs = plt.subplots(nrows=1, ncols=num_images, figsize=(figxsize, figysize), facecolor="white",
-								edgecolor="black",
-								gridspec_kw={'wspace': 0, 'hspace': 0, 'left': 0, 'right': 1, 'top': 1, 'bottom': 0})
-		# Flatten the axs array for easier indexing
-		axs = axs.flatten()
-		color_dict = {}
-		kymographs_gray = []
-
-		if mask_path is None and cells_df is None:
-			for i in range(start, end, 1):
-				phase = phase_stack[i, :, :]
-				axs[i - start].imshow(phase, cmap='gray')
-				axs[i - start].set_yticks([])
-				axs[i - start].set_xticks([])
-				# axs[i - start].set_xlabel(f"{i}", fontsize=8)
-				if phase.ndim == 3:  # Check if it is an RGB image
-					kymograph_gray = np.mean(phase, axis=2)  # Average across color channels
-				else:
-					kymograph_gray = phase  # If it's already grayscale, just copy
-				kymographs_gray.append(kymograph_gray)
-			combined_kymograph = np.concatenate(kymographs_gray, axis=1)  # Concatenate horizontally
-			lin_filename = f'{fov_id}_{peak_id}.tif'
-			lin_filepath = os.path.join(plot_out_dir, lin_filename)
-			tifffile.imwrite(lin_filepath, combined_kymograph)
-
-
-		elif mask_path is not None:
-			if os.path.isfile(mask_path):
-				mask_stack = tifffile.imread(mask_path)
-				final_mask = mask_stack[end, :, :]
-				total_number_labels = len(np.unique(final_mask))
-
-				number_of_colors_needed = max(20, total_number_labels)
-				# Get a colormap with  distinct colors, for potential cell labels
-				cmap = plt.cm.get_cmap('tab20', number_of_colors_needed)
-				# Create a dictionary mapping integers to hex color codes
-				for j in range(number_of_colors_needed + 1):
-					color = cmap(j)[:3]  # Extract RGB values
-					color_dict[j] = color
-
-				for i in range(start, end, 1):
-					phase = phase_stack[i, :, :]
-					mask = mask_stack[i, :, :]
-					# Create a colormapped image
-					colored_mask = np.zeros((mask.shape[0], mask.shape[1], 3))
-					for x in range(mask.shape[0]):
-						for y in range(mask.shape[1]):
-							colored_mask[x, y] = color_dict[mask[x, y]]
-					# Access the specific subplot and plot the image
-					axs[i - start].imshow(phase, cmap='gray')
-					axs[i - start].imshow(colored_mask, alpha=alpha)
-					axs[i - start].set_yticks([])
-					axs[i - start].set_xticks([])
-					axs[i - start].set_xlabel(f"{i}", fontsize=8)
-
-		elif cells_df is not None:
-			unique_cell_ids = cells_df['cell_id'].unique()
-			total_number_labels = len(unique_cell_ids)
-			number_of_colors_needed = max(20, total_number_labels)
-			# Get a colormap with  distinct colors, for potential cell labels
-			cmap = plt.cm.get_cmap('tab20', number_of_colors_needed)
-			# Create a dictionary mapping integers to hex color codes
-			for color_i, cell_id in enumerate(unique_cell_ids):
-				color = cmap(color_i)[:3]  # Extract RGB values
-				color_dict[cell_id] = color
-			for i in range(start, end, 1):
-				phase = phase_stack[i, :, :]
-				cells_time = cells_df[cells_df['time_index'] == i]
-				if len(cells_time) >= 1:
-					for index, cell in cells_time.iterrows():
-						(y_loc, x_loc) = cell['centroids']
-						color = color_dict[cell['cell_id']]
-						axs[i - start].imshow(phase, cmap='gray')
-						axs[i - start].scatter(x_loc, y_loc, color=color, s=5)
-						axs[i - start].set_yticks([])
-						axs[i - start].set_xticks([])
-						axs[i - start].set_xlabel(f"{i}", fontsize=8)
-
-	patches = []
-	if len(color_dict.items()) >= 1:
-		for label, color in color_dict.items():
-			patches.append(mpatches.Patch(color=color, label=f"Label {label}"))
-	plt.legend(handles=patches, bbox_to_anchor=(1.05, 1), loc='upper left')
-
-	plt.show(fig)
-	plt.close(fig)
 
 
 def read_celltk_masks(path):
