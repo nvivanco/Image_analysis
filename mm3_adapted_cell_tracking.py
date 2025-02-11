@@ -1,16 +1,13 @@
-import os
 from typing import Tuple
 from skimage import segmentation, morphology
 from skimage.measure import regionprops
 from scipy.optimize import linear_sum_assignment
 import numpy as np
-import matplotlib as mpl
 import matplotlib.patches as patches
 import matplotlib.pyplot as plt
-import seaborn as sns
 import tifffile
 import pandas as pd
-import cell_class_from_mm3 as cell
+import cell_class_from_mm3 as cell_class
 
 
 
@@ -94,8 +91,6 @@ def find_cell_intensities(path_to_original_stack,
     fl_stack = tifffile.imread(path_to_original_stack)
     seg_stack = tifffile.imread(path_to_segmented_stack)
 
-
-
     # Loop through cells
     for cell in cells.values():
         # give this cell two lists to hold new information
@@ -133,12 +128,13 @@ def find_cell_intensities(path_to_original_stack,
     # The cell objects in the original dictionary will be updated,
     # no need to return anything specifically.
 
-def make_lineage_chnl_stack(path_to_stack: str,
-                            labeled_stack: str,
+def make_lineage_chnl_stack(labeled_stack: str,
                             fov_id: int,
                             peak_id: int,
                             pxl2um: float,
-                            start_frame: int = 0) -> dict:
+                            start_frame: int = 0,
+                            lookback_window = 10,
+                            lookforward_window = 10) -> dict:
     """
     Create the lineage for a set of segmented images for one channel. Start by making the regions in the first time points potenial cells.
     Go forward in time and map regions in the timepoint to the potential cells in previous time points, building the life of a cell.
@@ -172,107 +168,212 @@ def make_lineage_chnl_stack(path_to_stack: str,
     # go through regions by timepoint and build lineages
     # timepoints start with the index of the first image
     for t in range(start_frame, image_data_seg.shape[0]):  # Start from start_time
+        print(f'time: {t}')
 
         cell_leaves, cells = prune_leaves(cell_leaves, cells, lost_cell_time, t)
 
         current_regions = process_frame(image_data_seg[t], previous_regions)
 
-        if not current_regions:  # Check if current_regions is empty
-            continue  # Skip to the next time point
+        if not current_regions:
+            continue
 
-        if not previous_cells:  # Check if previous_cells is empty (only at the *real* start)
+        if not previous_cells:
             if t == start_frame:  # Initialize only at the specified start time
                 for region in current_regions:
                     cell_id = create_cell_id(region, t, fov_id, peak_id)
-                    cells[cell_id] = cell.Cell(pxl2um, cell_id, region, t, parent_id=None)
+                    cells[cell_id] = cell_class.Cell(pxl2um, cell_id, region, t, parent_id=None)
                     cell_leaves.append(cell_id)
                     previous_cells[cell_id] = cells[cell_id]
                 continue  # Move to the next frame
             else:
                 continue  # Skip if previous_cells is empty but it's not the start time
 
-        matches, unmatched_current, unmatched_previous, cell_leaves = link_regions(
-            current_regions, previous_cells, t, cells, cell_leaves,
-            fov_id, peak_id, pxl2um, cost_threshold=150, lookback_window=3
-        )
-        #visualize_matches(image_data_seg, t, matches, unmatched_current, unmatched_previous, previous_cells, current_regions)
+        # Only track active cells
+        active_previous_cells = {
+            cell_id: cell for cell_id, cell in previous_cells.items() if cell.is_active
+        }
 
-        for cell_id in matches:
-            cells[cell_id].last_meaningful_update = t
-        previous_cells = cells
+        if active_previous_cells:
+            matches, unmatched_current, unmatched_previous, cell_leaves = link_regions(
+                current_regions, active_previous_cells, t, cells, cell_leaves,  # Pass active cells ONLY
+                fov_id, peak_id, pxl2um, cost_threshold=150
+            )
+            for cell_id in matches:
+                cells[cell_id].last_meaningful_update = t
+            previous_cells = cells
 
-        # Handle Growth and Division
-        for prev_cell_id in unmatched_previous:
-            mother_cell = cells[prev_cell_id]
-            daughter_regions = []
+            #visualize_matches(image_data_seg, t, matches, unmatched_current, unmatched_previous, active_previous_cells, current_regions)
 
-            for current_region in current_regions:  # Iterate through the current_regions
-                centroid_dist = np.linalg.norm(np.array(mother_cell.centroids[-1]) - np.array(current_region.centroid))
-                if centroid_dist < 100:  # Adjust distance threshold
-                    daughter_regions.append(current_region)
+            # Handle Unmatched with lookback and lookforward
+            active_unmatched_previous = {
+                cell_id: active_previous_cells[cell_id] for cell_id in unmatched_previous if
+                cell_id in active_previous_cells
+            }
 
-            if len(daughter_regions) == 2:  # Found two potential daughters
+            for i in list(unmatched_current):
+                current_region = current_regions[i]
 
-                growth1 = check_growth_by_region(mother_cell, daughter_regions[0])
-                growth2 = check_growth_by_region(mother_cell, daughter_regions[1])
+                # Check if the current region has already been assigned to an active cell
+                already_assigned = False
+                for cell in cells.values():
+                    if cell.is_active and t > 0 and current_region.label in [r.label for r in cell.regions if
+                                                                             cell.times[-1] == (t - 1)]:
+                        already_assigned = True
 
-                if growth1 or growth2:  # At least one daughter is simple growth
-                    if growth1:
-                        cells[prev_cell_id].grow(daughter_regions[0], t)
-                        cells[prev_cell_id].last_meaningful_update = t
-                        try:
-                            unmatched_current.remove(current_regions.index(daughter_regions[0]))
-                        except ValueError:
-                            pass
-                    elif growth2:
-                        cells[prev_cell_id].grow(daughter_regions[1], t)
-                        cells[prev_cell_id].last_meaningful_update = t
-                        try:
-                            unmatched_current.remove(current_regions.index(daughter_regions[1]))
-                        except ValueError:
-                            pass
-                    continue  # Move to the next mother cell
+                        break
+                if already_assigned:
+                    continue  # If it has been assigned, skip it
 
-                else:  # No simple growth; check for division
-                    print(f"Processing timepoint t = {t}")
-                    if check_division(mother_cell, daughter_regions[0], daughter_regions[1]):
-                        print('check division')
-                        daughter1_id, daughter2_id, cells = divide_cell(
-                            daughter_regions[0], daughter_regions[1], t, peak_id, fov_id, pxl2um, cells,
-                            prev_cell_id
+                # Lookback Matching
+                print('lookback')
+                best_lookback_match = None
+                min_lookback_cost = float('inf')
+
+                for frame_offset in range(1, lookback_window + 1):
+                    lookback_time = t - frame_offset
+                    if lookback_time < 0:
+                        break
+
+                    potential_lookback_cells = {
+                        cell_id: cell
+                        for cell_id, cell in cells.items()
+                        if cell.times[
+                               -1] == lookback_time and cell.fov == fov_id and cell.peak == peak_id and cell.is_active
+                        # Check for active cells
+                    }
+
+                    for prev_cell_id, prev_cell in potential_lookback_cells.items():
+                        prev_region = prev_cell.regions[-1]
+                        centroid_dist = np.linalg.norm(
+                            np.array(current_region.centroid) - np.array(prev_region.centroid)
                         )
-                        cells[prev_cell_id].last_meaningful_update = t
-                        cells[daughter1_id].last_meaningful_update = t
-                        cells[daughter2_id].last_meaningful_update = t
-                        cell_leaves.remove(prev_cell_id)
-                        cell_leaves.extend([daughter1_id, daughter2_id])
-                        try:
-                            unmatched_current = set(unmatched_current) - set(
-                                [current_regions.index(region) for region in daughter_regions])
-                        except ValueError:
-                            pass
+                        area_diff = abs(current_region.area - prev_region.area)
+                        cost = centroid_dist + 0.1 * area_diff
+                        if cost < min_lookback_cost:
+                            min_lookback_cost = cost
+                            best_lookback_match = prev_cell_id
 
-        # Handle remaining unmatched current regions as new cells (if not part of a division)
-        for region in current_regions:  # Iterate through the current_regions
-            if region.label not in {cell.labels[-1] for cell in cells.values() if
-                                    cell.times[-1] == t}:  # Check if label exists
-                cell_id = create_cell_id(region, t, fov_id, peak_id)
-                cells[cell_id] = cell.Cell(pxl2um, cell_id, region, t, parent_id=None)
-                cells[cell_id].last_meaningful_update = t  # New cell
+                if best_lookback_match and min_lookback_cost < 50 * 2:  # Increased threshold
+                    cells[best_lookback_match].grow(current_region, t)
+                    unmatched_current.remove(i)
+                    continue  # Skip to the next unmatched current region
+
+                # Lookforward Matching
+                print('lookforward')
+                best_lookforward_match = None
+                min_lookforward_cost = float('inf')
+
+                for frame_offset in range(1, lookforward_window + 1):
+                    lookforward_time = t + frame_offset
+                    if lookforward_time >= image_data_seg.shape[0]:
+                        break
+
+                    potential_lookforward_cells = {
+                        cell_id: cell
+                        for cell_id, cell in cells.items()
+                        if cell.times[
+                               -1] == lookforward_time and cell.fov == fov_id and cell.peak == peak_id and cell.is_active
+                        # Check for active cells
+                    }
+
+                    for next_cell_id, next_cell in potential_lookforward_cells.items():
+                        next_region = next_cell.regions[-1]
+                        centroid_dist = np.linalg.norm(
+                            np.array(current_region.centroid) - np.array(next_region.centroid)
+                        )
+                        area_diff = abs(current_region.area - next_region.area)
+                        cost = centroid_dist + 0.1 * area_diff
+                        if cost < min_lookforward_cost:
+                            min_lookforward_cost = cost
+                            best_lookforward_match = next_cell_id
+
+                if best_lookforward_match and min_lookforward_cost < 50 * 2:
+                    current_cell_id = None
+                    for cell_id, cell in previous_cells.items():
+                        if cell.labels[-1] == current_regions[i].label and cell.times[-1] == (
+                                t - 1) and cell.is_active:  # Check for active cells
+                            current_cell_id = cell_id
+                            break
+                    if current_cell_id:
+                        cells[current_cell_id].grow(current_regions[i], t)
+                        unmatched_current.remove(i)
+                        continue
+
+                # New Cell Creation if No Match Back or Forward in Time
+                cell_id = create_cell_id(current_region, t, fov_id, peak_id)
+                cells[cell_id] = cell_class.Cell(pxl2um, cell_id, current_region, t, parent_id=None)
+                cells[cell_id].last_meaningful_update = t
                 cell_leaves.append(cell_id)
                 previous_cells[cell_id] = cells[cell_id]
+                print('could not find a match')
+
+
+            # Handle Potential Division
+            print('handle potential division')
+            for prev_cell_id in list(active_unmatched_previous):
+                mother_cell = cells.get(prev_cell_id)
+                if mother_cell is None or not mother_cell.is_active:
+                    continue
+                daughter_regions = []
+
+                for current_region in current_regions:
+                    centroid_dist = np.linalg.norm(np.array(mother_cell.centroids[-1]) - np.array(current_region.centroid))
+                    if centroid_dist < 150:  # Adjust distance threshold
+                        daughter_regions.append(current_region)
+
+                if len(daughter_regions) == 2:  # Found two potential daughters
+
+                    growth1 = check_growth_by_region(mother_cell, daughter_regions[0])
+                    growth2 = check_growth_by_region(mother_cell, daughter_regions[1])
+
+                    if growth1 or growth2:  # At least one daughter is simple growth
+                        if growth1:
+                            cells[prev_cell_id].grow(daughter_regions[0], t)
+                            cells[prev_cell_id].last_meaningful_update = t
+                            try:
+                                unmatched_current.remove(current_regions.index(daughter_regions[0]))
+                            except ValueError:
+                                pass
+                        elif growth2:
+                            cells[prev_cell_id].grow(daughter_regions[1], t)
+                            cells[prev_cell_id].last_meaningful_update = t
+                            try:
+                                unmatched_current.remove(current_regions.index(daughter_regions[1]))
+                            except ValueError:
+                                pass
+                        continue  # Move to the next mother cell
+
+                    else:  # No simple growth, check for division
+                        if check_division(mother_cell, daughter_regions[0], daughter_regions[1]):
+                            daughter1_id, daughter2_id, cells = divide_cell(
+                                daughter_regions[0], daughter_regions[1], t, peak_id, fov_id, pxl2um, cells,
+                                prev_cell_id
+                            )
+                            if prev_cell_id not in cell_leaves:
+                                continue
+                            cells[prev_cell_id].last_meaningful_update = t
+                            cells[daughter1_id].last_meaningful_update = t
+                            cells[daughter2_id].last_meaningful_update = t
+                            cell_leaves.remove(prev_cell_id)
+                            cell_leaves.extend([daughter1_id, daughter2_id])
+                            try:
+                                unmatched_current = set(unmatched_current) - set(
+                                    [current_regions.index(region) for region in daughter_regions])
+                            except ValueError:
+                                pass
+
 
         previous_regions = current_regions
 
-        # Handle New Cells in the Last Frame (Adjusted)
-    last_frame_index = image_data_seg.shape[0] - 1  # Correct way to get last index
-    last_frame_regions = process_frame(image_data_seg[last_frame_index])  # Use process frame function
+    # Handle New Cells in the Last Frame
+    last_frame_index = image_data_seg.shape[0] - 1
+    last_frame_regions = process_frame(image_data_seg[last_frame_index])
     tracked_last_frame_regions = {cell.labels[-1] for cell in cells.values() if cell.times[-1] == last_frame_index}
 
     for region in last_frame_regions:
         if region.label not in tracked_last_frame_regions:
             cell_id = create_cell_id(region, last_frame_index, fov_id, peak_id)
-            cells[cell_id] = cell.Cell(pxl2um, cell_id, region, last_frame_index, parent_id=None)
+            cells[cell_id] = cell_class.Cell(pxl2um, cell_id, region, last_frame_index, parent_id=None)
             cell_leaves.append(cell_id)
 
     # return the dictionary with all the cells
@@ -359,33 +460,6 @@ def visualize_matches(image_data_seg, t, matches, unmatched_current, unmatched_p
         plt.show()
 
 
-def plot_regions(
-    seg_data: np.ndarray,
-    cells: dict,
-    t: int,
-    ax: plt.Axes,
-    cmap: str,
-    vmin: float = 0.5,
-    vmax: float = 100) -> plt.Axes:
-    """Plots segmented cells from the cells dictionary."""
-
-
-    for cell in cells.values():
-        if not cell.is_active:  # Skip inactive cells
-            continue
-
-        if t in cell.times:  # Check if the cell exists at this time point
-            n = cell.times.index(t) # Get the index for the time point
-            region = cell.regions[n] # Access the correct region
-            rescaled_color_index = region.centroid[0] / seg_data.shape[0] * vmax
-            seg_relabeled[seg_relabeled == region.label] = (
-                int(rescaled_color_index) - 0.1
-            )
-
-    ax.imshow(seg_relabeled, cmap=cmap, alpha=0.5, vmin=vmin, vmax=vmax)
-    return ax
-
-
 def prune_leaves(cell_leaves, cells, lost_cell_time, t):
     if not cell_leaves:
         return cell_leaves, cells
@@ -413,7 +487,7 @@ def divide_cell(
     peak_id: int,
     fov_id: int,
     pxl2um: float,
-    cells: dict[str, cell.Cell],
+    cells: dict[str, cell_class.Cell],
     leaf_id: str) -> Tuple[str, str, dict]:
     """
     Create two new cells and divide the mother
@@ -449,14 +523,14 @@ def divide_cell(
 
     daughter1_id = create_cell_id(region1, t, peak_id, fov_id)
     daughter2_id = create_cell_id(region2, t, peak_id, fov_id)
-    cells[daughter1_id] = cell.Cell(
+    cells[daughter1_id] = cell_class.Cell(
         pxl2um,
         daughter1_id,
         region1,
         t,
         parent_id=leaf_id,
     )
-    cells[daughter2_id] = cell.Cell(
+    cells[daughter2_id] = cell_class.Cell(
         pxl2um,
         daughter2_id,
         region2,
@@ -480,8 +554,8 @@ def process_frame(seg_image, previous_regions=None):
     return current_regions
 
 
-def relabel_regions(current_regions, previous_regions, full_image_shape):  # Add full_image_shape
-    """Relabels regions using IoU and the Hungarian algorithm (Corrected)."""
+def relabel_regions(current_regions, previous_regions, full_image_shape):
+    """Relabels regions using IoU and the Hungarian algorithm."""
 
     if not previous_regions:
         for i, region in enumerate(current_regions):
@@ -524,7 +598,6 @@ def relabel_regions(current_regions, previous_regions, full_image_shape):  # Add
             iou = intersection / union if union > 0 else 0
             cost_matrix[i, j] = -iou  # Maximize IoU
 
-    # ... (Rest of the Hungarian algorithm and label assignment remain the same)
     row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
     relabelled_regions = []
@@ -551,16 +624,18 @@ def relabel_regions(current_regions, previous_regions, full_image_shape):  # Add
     return relabelled_regions
 
 
-def link_regions(current_regions, previous_cells, t, cells, cell_leaves, fov_id, peak_id, pxl2um, cost_threshold=150, lookback_window=3):
-    """Links regions between frames, including lookback matching."""
+def link_regions(current_regions, previous_cells, t, cells, cell_leaves, fov_id, peak_id, pxl2um,
+                 cost_threshold=150):
+    """Links regions between frames, including lookback and look-forward matching and division handling."""
 
     n_current = len(current_regions)
     n_previous = len(previous_cells)
 
     if n_previous == 0:  # First frame
+        print('no previous cells')
         for current_region in current_regions:
             cell_id = create_cell_id(current_region, t, fov_id, peak_id)
-            cells[cell_id] = cell.Cell(pxl2um, cell_id, current_region, t, parent_id=None)
+            cells[cell_id] = cell_class.Cell(pxl2um, cell_id, current_region, t, parent_id=None)
             cell_leaves.append(cell_id)
             previous_cells[cell_id] = cells[cell_id]
         return {}, set(), set(), cell_leaves
@@ -581,60 +656,30 @@ def link_regions(current_regions, previous_cells, t, cells, cell_leaves, fov_id,
     for i, j in zip(row_ind, col_ind):
         if cost_matrix[i, j] < cost_threshold:
             prev_cell_id = list(previous_cells.keys())[j]
+
+            prev_cell = previous_cells[prev_cell_id]  # Get the previous cell object
+            current_region = current_regions[i]
+
+            # Shrinkage and Growth Check
+            previous_area = prev_cell.regions[-1].area
+            current_area = current_region.area
+            change_factor = current_area / previous_area if previous_area > 0 else 0
+
+            if change_factor < 0.7 or change_factor > 1.3:
+                continue  # Skip if excessive change
+
             matches[prev_cell_id] = i
-            cells[prev_cell_id].grow(current_regions[i], t)
+            cells[prev_cell_id].grow(current_region, t)
 
     unmatched_current = set(range(n_current)) - set(row_ind)
     unmatched_previous = set(previous_cells) - set([list(previous_cells.keys())[k] for k in col_ind])
 
-    # Lookback Matching
-    for i in list(unmatched_current):  # Iterate over a copy
-        current_region = current_regions[i]
-        best_match_cell_id = None
-        min_cost = float('inf')
-
-        for frame_offset in range(1, lookback_window + 1):
-            lookback_time = t - frame_offset
-            if lookback_time < 0:  # Handle edge case: no previous frame
-                break
-
-            potential_previous_cells = {
-                cell_id: cell for cell_id, cell in cells.items()
-                if cell.times[-1] == lookback_time and cell.fov == fov_id and cell.peak == peak_id
-            }
-
-            if not potential_previous_cells:
-                continue
-
-            for prev_cell_id, prev_cell_object in potential_previous_cells.items():
-                prev_region = prev_cell_object.regions[-1]
-                centroid_dist = np.linalg.norm(
-                    np.array(current_region.centroid) - np.array(prev_region.centroid)
-                )
-                area_diff = abs(current_region.area - prev_region.area)
-                cost = centroid_dist + 0.1 * area_diff  # Your cost function
-                if cost < min_cost:
-                    min_cost = cost
-                    best_match_cell_id = prev_cell_id
-
-        if best_match_cell_id is not None and min_cost < cost_threshold * 2:  # Increased threshold
-            cells[best_match_cell_id].grow(current_region, t)
-            unmatched_current.remove(i)
-            if best_match_cell_id in unmatched_previous:
-                unmatched_previous.remove(best_match_cell_id)
-
-    # Handle remaining unmatched current regions as new cells
-    for i in unmatched_current:
-        current_region = current_regions[i]
-        cell_id = create_cell_id(current_region, t, fov_id, peak_id)
-        cells[cell_id] = cell.Cell(pxl2um, cell_id, current_region, t, parent_id=None)
-        cell_leaves.append(cell_id)
-        previous_cells[cell_id] = cells[cell_id]
-
     return matches, unmatched_current, unmatched_previous, cell_leaves
-def check_division(mother_cell: cell.Cell,
+
+
+def check_division(mother_cell: cell_class.Cell,
                    region1, region2,
-                   min_area_ratio=0.9,
+                   min_area_ratio=0.7,
                    dist_threshold=150) -> int:
     """Checks to see if it makes sense to divide a
     cell into two new cells based on two regions."""
@@ -642,21 +687,16 @@ def check_division(mother_cell: cell.Cell,
     # Basic Area Check
     total_daughter_area = region1.area + region2.area
 
-    if not (mother_cell.areas[-1] * min_area_ratio <= total_daughter_area):
-        print('area check failed')
-        return False  # Area check failed
+    if not (
+            mother_cell.areas[-1] * min_area_ratio <= total_daughter_area and
+            total_daughter_area <= mother_cell.areas[-1] * 1.3
+    ):
+        return False
 
     # Proximity Check
     centroid_dist1 = np.linalg.norm(np.array(mother_cell.centroids[-1]) - np.array(region1.centroid))
     centroid_dist2 = np.linalg.norm(np.array(mother_cell.centroids[-1]) - np.array(region2.centroid))
     daughter_dist = np.linalg.norm(np.array(region1.centroid) - np.array(region2.centroid))
-
-    print('mother and region 1 distance')
-    print(centroid_dist1)
-    print('mother and region 2 distance')
-    print(centroid_dist2)
-    print('region 1 and region 2 distance')
-    print(daughter_dist)
 
     if centroid_dist1 > dist_threshold or centroid_dist2 > dist_threshold or daughter_dist > dist_threshold:
         print('proximity check failed')
@@ -691,7 +731,7 @@ def create_cell_id(
     return cell_id
 
 
-def check_growth_by_region(cell: cell.Cell, region) -> bool:
+def check_growth_by_region(cell: cell_class.Cell, region) -> bool:
     """Checks to see if it makes sense
     to grow a cell by a particular region
 
