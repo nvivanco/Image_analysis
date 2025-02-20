@@ -32,6 +32,9 @@ def cells2df(cells, num_time_frames=2,
     time_index_lengths = final_cells_pd['time_index'].str.len()
     filtered_cells_pd = final_cells_pd[time_index_lengths > num_time_frames]
 
+    if filtered_cells_pd.empty:
+        print(f"Warning: No cells found after filtering (num_time_frames = {num_time_frames}).")
+        return pd.DataFrame(columns=final_cells_pd.columns)
 
     def create_time_points(row):
         n_times = len(row['time_index'])
@@ -51,8 +54,6 @@ def cells2df(cells, num_time_frames=2,
         return pd.DataFrame(data)
 
     time_point_df = filtered_cells_pd.apply(create_time_points, axis=1)
-
-    # Concatenate the DataFrames efficiently
     time_point_df = pd.concat(time_point_df.tolist(), ignore_index=True)
 
     # Explode only the necessary column (if it's still a list after the previous steps)
@@ -168,7 +169,6 @@ def make_lineage_chnl_stack(labeled_stack: str,
     # go through regions by timepoint and build lineages
     # timepoints start with the index of the first image
     for t in range(start_frame, image_data_seg.shape[0]):  # Start from start_time
-        print(f'time: {t}')
 
         cell_leaves, cells = prune_leaves(cell_leaves, cells, lost_cell_time, t)
 
@@ -225,7 +225,6 @@ def make_lineage_chnl_stack(labeled_stack: str,
                     continue  # If it has been assigned, skip it
 
                 # Lookback Matching
-                print('lookback')
                 best_lookback_match = None
                 min_lookback_cost = float('inf')
 
@@ -259,7 +258,6 @@ def make_lineage_chnl_stack(labeled_stack: str,
                     continue  # Skip to the next unmatched current region
 
                 # Lookforward Matching
-                print('lookforward')
                 best_lookforward_match = None
                 min_lookforward_cost = float('inf')
 
@@ -305,11 +303,8 @@ def make_lineage_chnl_stack(labeled_stack: str,
                 cells[cell_id].last_meaningful_update = t
                 cell_leaves.append(cell_id)
                 previous_cells[cell_id] = cells[cell_id]
-                print('could not find a match')
-
 
             # Handle Potential Division
-            print('handle potential division')
             for prev_cell_id in list(active_unmatched_previous):
                 mother_cell = cells.get(prev_cell_id)
                 if mother_cell is None or not mother_cell.is_active:
@@ -330,17 +325,21 @@ def make_lineage_chnl_stack(labeled_stack: str,
                         if growth1:
                             cells[prev_cell_id].grow(daughter_regions[0], t)
                             cells[prev_cell_id].last_meaningful_update = t
-                            try:
-                                unmatched_current.remove(current_regions.index(daughter_regions[0]))
-                            except ValueError:
-                                pass
+                            # Remove the region from unmatched_current
+                            label_to_remove = daughter_regions[0].label
+                            indices_to_remove = [i for i, region in enumerate(current_regions) if
+                                                 region.label == label_to_remove]
+                            if indices_to_remove:
+                                unmatched_current.discard(indices_to_remove[0])
                         elif growth2:
                             cells[prev_cell_id].grow(daughter_regions[1], t)
                             cells[prev_cell_id].last_meaningful_update = t
-                            try:
-                                unmatched_current.remove(current_regions.index(daughter_regions[1]))
-                            except ValueError:
-                                pass
+                            # Remove the region from unmatched_current
+                            label_to_remove = daughter_regions[1].label
+                            indices_to_remove = [i for i, region in enumerate(current_regions) if
+                                                 region.label == label_to_remove]
+                            if indices_to_remove:
+                                unmatched_current.discard(indices_to_remove[0])
                         continue  # Move to the next mother cell
 
                     else:  # No simple growth, check for division
@@ -356,12 +355,11 @@ def make_lineage_chnl_stack(labeled_stack: str,
                             cells[daughter2_id].last_meaningful_update = t
                             cell_leaves.remove(prev_cell_id)
                             cell_leaves.extend([daughter1_id, daughter2_id])
-                            try:
-                                unmatched_current = set(unmatched_current) - set(
-                                    [current_regions.index(region) for region in daughter_regions])
-                            except ValueError:
-                                pass
-
+                            # Remove daughter regions from unmatched_current by LABEL
+                            labels_to_remove = [region.label for region in daughter_regions]
+                            indices_to_remove = [i for i, region in enumerate(current_regions) if
+                                                 region.label in labels_to_remove]
+                            unmatched_current = unmatched_current - set(indices_to_remove)
 
         previous_regions = current_regions
 
@@ -537,7 +535,6 @@ def divide_cell(
         t,
         parent_id=leaf_id,
     )
-    print('daughters and parent names assigned')
     cells[leaf_id].divide(cells[daughter1_id], cells[daughter2_id], t)
 
     return daughter1_id, daughter2_id, cells
@@ -632,7 +629,6 @@ def link_regions(current_regions, previous_cells, t, cells, cell_leaves, fov_id,
     n_previous = len(previous_cells)
 
     if n_previous == 0:  # First frame
-        print('no previous cells')
         for current_region in current_regions:
             cell_id = create_cell_id(current_region, t, fov_id, peak_id)
             cells[cell_id] = cell_class.Cell(pxl2um, cell_id, current_region, t, parent_id=None)
@@ -699,7 +695,6 @@ def check_division(mother_cell: cell_class.Cell,
     daughter_dist = np.linalg.norm(np.array(region1.centroid) - np.array(region2.centroid))
 
     if centroid_dist1 > dist_threshold or centroid_dist2 > dist_threshold or daughter_dist > dist_threshold:
-        print('proximity check failed')
         return False  # Proximity check failed
 
     return True  # All checks passed; it's a division
