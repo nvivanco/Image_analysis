@@ -27,16 +27,17 @@ def _create_color_dict(data_source):
     else:
         return {}  # Return empty if no data source
 
-    cmap = plt.cm.get_cmap('tab20', num_colors)
+    cmap = plt.colormaps['tab20'](np.linspace(0, 1, num_colors))
+
     if isinstance(data_source, np.ndarray):  # For mask_path
-        color_dict = {j: cmap(j)[:3] for j in range(num_colors + 1)}
+        color_dict = {j: cmap[j, :3] for j in range(num_colors)} # Corrected range
     elif isinstance(data_source, dict):  # For cells_dict
-        color_dict = {cell_id: cmap(i)[:3] for i, cell_id in enumerate(data_source)}
+        color_dict = {cell_id: cmap[i, :3] for i, cell_id in enumerate(data_source)}
     elif isinstance(data_source, pd.DataFrame):  # For cells_df
-        color_dict = {cell_id: cmap(color_i)[:3] for color_i, cell_id in enumerate(data_source['cell_id'].unique())}
+        unique_cell_ids = data_source['cell_id'].unique()  # Get unique cell IDs
+        color_dict = {cell_id: cmap[i, :3] for i, cell_id in enumerate(unique_cell_ids)}
 
     return color_dict
-
 
 # Helper functions for plotting
 

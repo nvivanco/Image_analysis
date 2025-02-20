@@ -14,7 +14,6 @@ def segment_chnl_stack(path_to_phase_channel_stack,
 					   first_opening=5,
 					   distance_threshold=3,
 					   second_opening_size=1,
-					   min_object_size=5,
 					   min_cell_area=200,
 					   max_cell_area=700,
 					   small_merge_area_threshold=50):
@@ -40,7 +39,6 @@ def segment_chnl_stack(path_to_phase_channel_stack,
 											first_opening,
 											distance_threshold,
 											second_opening_size,
-											min_object_size,
 											min_cell_area,
 											max_cell_area,
 											small_merge_area_threshold)
@@ -66,7 +64,6 @@ def segment_image(image,
                   first_opening=5,
                   distance_threshold=3,
                   second_opening_size=1,
-                  min_object_size=5,
                   min_cell_area=200,
                   max_cell_area=700,
                   small_merge_area_threshold=50):
@@ -76,7 +73,8 @@ def segment_image(image,
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             thresh = threshold_otsu(image)
-    except:
+    except Exception as e:
+        print(f"Error in thresholding: {e}")
         return np.zeros_like(image)
 
     thresholded = image > OTSU_threshold * thresh
@@ -98,8 +96,6 @@ def segment_image(image,
 
     if num_labels == 0:
         return np.zeros_like(image)
-
-    labeled = morphology.remove_small_objects(labeled, min_size=min_object_size)
 
     markers = morphology.label(labeled, connectivity=1)
 
@@ -126,7 +122,6 @@ def segment_image(image,
         for i, bbox1 in enumerate(bboxes):
             for j, bbox2 in enumerate(bboxes):
                 if i != j and overlap(bbox1, bbox2) and areas[i] < small_merge_area_threshold and areas[j] < small_merge_area_threshold:
-                    print('merge regions')
                     graph.add_edge(regions[i].label, regions[j].label)
 
         # Find connected components (merged regions)
