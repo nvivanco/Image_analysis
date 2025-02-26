@@ -112,7 +112,7 @@ def display_cells_from_dict(path_to_original_stack, cells_dict, start=0, end=20)
         _set_axes_properties(axs[i - start], i)
 
     _add_legend(color_dict)
-    _show_and_close_plot(fig)
+    return fig
 
 
 def display_stack(path_to_original_stack, start=0, end=20):
