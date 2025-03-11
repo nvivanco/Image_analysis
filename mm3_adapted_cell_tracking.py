@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import tifffile
 import pandas as pd
 import cell_class_from_mm3 as cell_class
+import plot_cells
 
 
 
@@ -73,61 +74,66 @@ def cells2df(cells, num_time_frames=2,
         time_point_df[['bb_xLeft', 'bb_yTop', 'bb_width', 'bb_height']] = time_point_df[['bb_xLeft', 'bb_yTop', 'bb_width', 'bb_height']].apply(pd.Series)
         time_point_df.drop(['bbox'], axis=1, inplace=True)
 
-
     return time_point_df
 
+def _midline_intensity(region, image):
+    """
+    Calculates the intensity along the middle horizontal axis of a cell.
 
-def find_cell_intensities(path_to_original_stack,
-                          path_to_segmented_stack,
-                          cells, start_frame,
-                          midline=False):
+    Args:
+        region: A skimage.measure._regionprops.RegionProperties object.
+        image: The masked image (NumPy array) containing the fluorescence data.
+
+    Returns:
+        float: The average intensity along the horizontal midline, or NaN if the region is invalid.
+    """
+    if region is None:
+        return np.nan
+
+    centroid = region.centroid
+    center_row = int(centroid[0])  # Get the integer row coordinate
+
+    if 0 <= center_row < image.shape[0]:
+        horizontal_line = image[center_row, :]
+        if horizontal_line.size > 0:
+            return np.nanmean(horizontal_line)
+        else:
+            return np.nan
+    else:
+        return np.nan #centroid out of image bounds
+
+def find_cell_intensities(path_to_stack, cells):
     """
     Finds fluorescent information for cells. All the cells in cells
     should be from one fov/peak. See the function
     organize_cells_by_channel()
+    The cell objects in the original dictionary will be updated.
     """
 
     # Load fluorescent images and segmented images for this microfluidic channel
 
-    fl_stack = tifffile.imread(path_to_original_stack)
-    seg_stack = tifffile.imread(path_to_segmented_stack)
+    fl_stack = tifffile.imread(path_to_stack)
 
     # Loop through cells
-    for cell in cells.values():
-        # give this cell two lists to hold new information
-        cell.fl_tots = []  # total fluorescence per time point
+    for cell_id, cell in cells.items():
+        cell.fl_tots = []  # total pixel intensity per time point
         cell.fl_area_avgs = []
-        cell.fl_vol_avgs = []  # avg fluorescence per unit volume by timepoint
-
-        if midline:
-            cell.mid_fl = []  # avg fluorescence of midline
+        cell.fl_vol_avgs = []  # avg pixel intensity per unit volume by timepoint
+        cell.mid_intensity = []  # avg pixel intensity of horizontal midline
 
         # and the time points that make up this cell's life
-        for n, t in enumerate(cell.times):
-            # create fluorescent image only for this cell and timepoint.
-            fl_image_masked = np.copy(fl_stack[t - start_frame])
-            fl_image_masked[seg_stack[t - start_frame] != cell.labels[n]] = 0
+        for t in cell.times:
+            n = cell.times.index(t)
+            image = np.copy(fl_stack[t])
+            region = cell.regions[n]
+            cell_mask = plot_cells.mask_from_region(region, image)
+            masked_image = image * cell_mask
+            middle_intensity = _midline_intensity(region, image)
 
-            # append total flourescent image
-            cell.fl_tots.append(np.sum(fl_image_masked))
-            # and the average fluorescence
-            cell.fl_area_avgs.append(np.sum(fl_image_masked) / cell.areas[n])
-            cell.fl_vol_avgs.append(np.sum(fl_image_masked) / cell.volumes[n])
-
-            if midline:
-                # add the midline average by first applying morphology transform
-                bin_mask = np.copy(seg_stack[t - start_frame])
-                bin_mask[bin_mask != cell.labels[n]] = 0
-                med_mask, _ = morphology.medial_axis(bin_mask, return_distance=True)
-                # med_mask[med_dist < np.floor(cap_radius/2)] = 0
-                # print(img_fluo[med_mask])
-                if np.shape(fl_image_masked[med_mask])[0] > 0:
-                    cell.mid_fl.append(np.nanmean(fl_image_masked[med_mask]))
-                else:
-                    cell.mid_fl.append(np.nan)
-
-    # The cell objects in the original dictionary will be updated,
-    # no need to return anything specifically.
+            cell.fl_tots.append(np.sum(masked_image))
+            cell.mid_intensity.append(middle_intensity)
+            cell.fl_area_avgs.append(np.sum(masked_image) / cell.areas[n])
+            cell.fl_vol_avgs.append(np.sum(masked_image) / cell.volumes[n])
 
 def make_lineage_chnl_stack(labeled_stack: str,
                             fov_id: int,
