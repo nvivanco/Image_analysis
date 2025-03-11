@@ -39,6 +39,12 @@ def _create_color_dict(data_source):
 
     return color_dict
 
+def mask_from_region(region, image):
+    cell_mask = np.zeros(image.shape, dtype=int)
+    rr, cc = polygon(np.array(region.coords)[:, 0], np.array(region.coords)[:, 1], image.shape)
+    cell_mask[rr, cc] = 1
+    return cell_mask
+
 # Helper functions for plotting
 
 def _plot_mask(ax, mask, color_dict, alpha):
@@ -49,9 +55,7 @@ def _plot_mask(ax, mask, color_dict, alpha):
     ax.imshow(colored_mask, alpha=alpha)
 
 def _plot_cell_contour(ax, phase, region, color):
-    cell_mask = np.zeros(phase.shape, dtype=int)
-    rr, cc = polygon(np.array(region.coords)[:, 0], np.array(region.coords)[:, 1], phase.shape)
-    cell_mask[rr, cc] = 1
+    cell_mask = mask_from_region(region, phase)
     ax.contour(cell_mask, levels=[0.5], colors=[color], linewidths=1)
 
 
