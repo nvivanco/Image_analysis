@@ -6,8 +6,11 @@ from scipy.signal import find_peaks
 from scipy.optimize import curve_fit, OptimizeWarning
 from numba import jit
 
-def plot_growth_analysis(cell_df, cell_id, time_col, length_col, prominence=0.3, distance=3, window_size=3):
+def plot_growth_analysis(all_cells_pd, cell_id, time_col, length_col, prominence=0.3, distance=3, window_size=3):
+
     """Analyzes and plots cell growth data with exponential fits for detected phases."""
+
+    cell_df = all_cells_pd[all_cells_pd['cell_id'] == cell_id].copy()
 
     growth_phases = detect_growth_phases(cell_df, time_col, length_col, prominence, distance, window_size)
 
@@ -33,7 +36,7 @@ def plot_growth_analysis(cell_df, cell_id, time_col, length_col, prominence=0.3,
     return cell_df
 
 
-def fit_cell_growth(df, time_col, length_col, start_time, end_time):
+def fit_cell_growth(df, time_col, length_col):
     """
     Fits an exponential function to cell growth data within a specified time range.
 
@@ -53,7 +56,7 @@ def fit_cell_growth(df, time_col, length_col, start_time, end_time):
                Returns (None, None, None, None) if fitting fails.
     """
 
-    df_growth = df[(df[time_col] >= start_time) & (df[time_col] <= end_time)].copy()
+    df_growth = df.copy()
 
     if df_growth.empty:
         print("Warning: No data within the specified time range.")
@@ -67,6 +70,7 @@ def fit_cell_growth(df, time_col, length_col, start_time, end_time):
     x_data = x_data[mask]
     y_data = y_data[mask]
 
+
     if len(x_data) < 3:
         print("Warning: Insufficient data points after NaN removal.")
         return None, None, None, None
@@ -79,7 +83,7 @@ def fit_cell_growth(df, time_col, length_col, start_time, end_time):
     p0 = [A_guess, k_guess, b_guess]
 
     lower_bounds = [0, 0, 0]  # a, k, c
-    upper_bounds = [np.inf, np.inf, np.inf] #allow k to be any positive number.
+    upper_bounds = [np.inf, 1, np.inf] #allow k to be any positive number.
 
     try:
         popt, pcov = curve_fit(modified_exponential, x_data, y_data, p0=p0,
@@ -183,10 +187,14 @@ def _process_growth_phase(cell_df, phase_index, start, end, time_col, length_col
         print(f"Skipping Phase {phase_index} ({start}-{end}): Insufficient data.")
         return cell_df
 
-    popt, _, y_fit, r_squared = fit_cell_growth(phase_data, time_col, length_col, start, end)
+    popt, _, y_fit, r_squared = fit_cell_growth(phase_data, time_col, length_col)
 
-    if popt is None or r_squared < 0.3:
-        print(f"Skipping Phase {phase_index} ({start}-{end}): Fit failed or poor R-squared ({r_squared:.2f}).")
+    if popt is None or r_squared is None or (r_squared is not None and r_squared < 0.3):
+        if r_squared is None:
+            r_squared_str = "None"
+        else:
+            r_squared_str = f"{r_squared:.2f}"
+        print(f"Skipping Phase {phase_index} ({start}-{end}): Fit failed or poor R-squared ({r_squared_str}).")
         return cell_df
 
     residuals = phase_data[length_col] - y_fit
