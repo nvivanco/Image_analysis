@@ -1,5 +1,4 @@
 from typing import Tuple
-from skimage import segmentation, morphology
 from skimage.measure import regionprops
 from scipy.optimize import linear_sum_assignment
 import numpy as np
