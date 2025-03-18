@@ -14,7 +14,7 @@ def plot_growth_analysis(all_cells_pd, cell_id, time_col, length_col, prominence
 
     growth_phases = detect_growth_phases(cell_df, time_col, length_col, prominence, distance, window_size)
 
-    cell_df = cell_df.assign(y_fit=np.nan, residuals=np.nan, r_squared=np.nan, growth_phase=None)
+    cell_df = cell_df.assign(y_fit=np.nan, residuals=np.nan, r_squared=np.nan, growth_phase=None, growth_rate_constant=np.nan, doubling_time = np.nan)
 
     plt.figure(figsize=(10, 6))
     _plot_raw_data(cell_df, time_col, length_col, cell_id)
@@ -69,28 +69,21 @@ def fit_cell_growth(df, time_col, length_col):
     mask = ~np.isnan(x_data) & ~np.isnan(y_data)
     x_data = x_data[mask]
     y_data = y_data[mask]
+    log_y_data = np.log(y_data)
 
 
     if len(x_data) < 3:
         print("Warning: Insufficient data points after NaN removal.")
         return None, None, None, None
 
-    # Improved initial guesses
-    A_guess = np.max(y_data) - np.min(y_data)
-    k_guess = 0.1 * (np.max(y_data) - np.min(y_data)) / (np.max(x_data) - np.min(x_data)) #Estimate k from the slope.
-    b_guess = np.min(y_data)
-
-    p0 = [A_guess, k_guess, b_guess]
-
-    lower_bounds = [0, 0, 0]  # a, k, c
-    upper_bounds = [np.inf, 1, np.inf] #allow k to be any positive number.
 
     try:
-        popt, pcov = curve_fit(modified_exponential, x_data, y_data, p0=p0,
-                               bounds=(lower_bounds, upper_bounds), maxfev=5000)
+        popt, pcov = curve_fit(linear_model, x_data, log_y_data)
 
-        y_fit = modified_exponential(x_data, *popt)
+        log_y_fit = linear_model(x_data, *popt)
+        y_fit = np.exp(log_y_fit)
         r_squared = r2_score(y_data, y_fit)
+
 
         return popt, pcov, y_fit, r_squared
 
@@ -108,6 +101,8 @@ def modified_exponential(x, a, b, c):
         return np.inf
     return a * np.exp(exponent) + c
 
+def linear_model(x, m, c):
+    return m * x + c
 
 def detect_growth_phases(df, time_col, length_col, prominence=0.5, distance=5, window_size=3):
     """Detects growth phases using peak detection on the smoothed derivative, refined by the second derivative."""
@@ -198,8 +193,12 @@ def _process_growth_phase(cell_df, phase_index, start, end, time_col, length_col
         return cell_df
 
     residuals = phase_data[length_col] - y_fit
-    cell_df.loc[phase_data.index, ['y_fit', 'residuals', 'r_squared', 'growth_phase']] = \
-        [y_fit, residuals, r_squared, f'Phase {phase_index} ({start}-{end})']
+
+    growth_rate_constant = popt[0]
+    doubling_time = np.log(2) / growth_rate_constant
+
+    cell_df.loc[phase_data.index, ['y_fit', 'residuals', 'r_squared', 'growth_phase', 'growth_rate_constant', 'doubling_time']] = \
+        [y_fit, residuals, r_squared, f'Phase {phase_index} ({start}-{end})', growth_rate_constant, doubling_time]
 
     _plot_fitted_phase(phase_data, time_col, length_col, y_fit, phase_index, start, end)
     return cell_df

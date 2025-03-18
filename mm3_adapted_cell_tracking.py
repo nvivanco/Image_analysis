@@ -13,13 +13,14 @@ import plot_cells
 
 def cells2df(cells, num_time_frames=2,
              columns=['fov', 'peak', 'birth_label', 'parent', 'daughters', 'birth_time', 'times',
-                      'labels', 'bboxes', 'areas', 'lengths', 'widths', 'orientations', 'centroids', 'fl_area_avgs', 'is_active']) -> pd.DataFrame:
+                      'labels', 'bboxes', 'areas', 'lengths', 'widths', 'orientations', 'centroids',
+                      'fl_area_avgs', 'mid_intensity','fl_vol_avgs', 'fl_tots', 'masks', 'is_active']) -> pd.DataFrame:
     """Converts cell data to a DataFrame, handling potential issues."""
 
     cells_dict = {cell_id: vars(cell) for cell_id, cell in cells.items()}
     df = pd.DataFrame(cells_dict).transpose()
     final_cells_pd = df[columns]
-    final_cells_pd = final_cells_pd.sort_values(by=["fov", "peak", "birth_time", "birth_label"])
+    final_cells_pd = final_cells_pd.sort_values(by=['fov', 'peak', 'birth_time', 'birth_label'])
     final_cells_pd.reset_index(inplace=True)
     final_cells_pd.rename(columns={'index': 'cell_id',
                                    'abs_times': 'abs_times_(sec)',
@@ -45,7 +46,9 @@ def cells2df(cells, num_time_frames=2,
         }
 
         # Handle list and single-value columns consistently
-        for col in ['daughters', 'parent', 'labels', 'bboxes', 'areas_(pxls^2)', 'lengths_(pxls)', 'widths_(pxls)', 'orientations', 'centroids', 'fl_area_avgs']:
+        for col in ['daughters', 'parent', 'labels', 'bboxes', 'areas_(pxls^2)', 'lengths_(pxls)',
+                    'widths_(pxls)', 'orientations', 'centroids', 'fl_area_avgs', 'mid_intensity',
+                    'fl_vol_avgs', 'fl_tots', 'masks']:
             if isinstance(row[col], list):
                 data[col] = row[col]
             else:  # Single value
@@ -115,6 +118,7 @@ def find_cell_intensities(path_to_stack, cells):
 
     # Loop through cells
     for cell_id, cell in cells.items():
+        cell.masks = [] # save cell masks in cell_dict
         cell.fl_tots = []  # total pixel intensity per time point
         cell.fl_area_avgs = []
         cell.fl_vol_avgs = []  # avg pixel intensity per unit volume by timepoint
@@ -129,6 +133,7 @@ def find_cell_intensities(path_to_stack, cells):
             masked_image = image * cell_mask
             middle_intensity = _midline_intensity(region, image)
 
+            cell.masks.append(cell_mask)
             cell.fl_tots.append(np.sum(masked_image))
             cell.mid_intensity.append(middle_intensity)
             cell.fl_area_avgs.append(np.sum(masked_image) / cell.areas[n])
