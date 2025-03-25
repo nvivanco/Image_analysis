@@ -90,9 +90,9 @@ def segment_image(image,
 
     distance_opened = morphology.binary_opening(distance_thresh, morphology.disk(second_opening_size))
 
-    cleared = segmentation.clear_border(distance_opened)
+    #cleared = segmentation.clear_border(distance_opened)
 
-    labeled, num_labels = morphology.label(cleared, connectivity=1, return_num=True)
+    labeled, num_labels = morphology.label(distance_opened, connectivity=1, return_num=True)
 
     if num_labels == 0:
         return np.zeros_like(image)
