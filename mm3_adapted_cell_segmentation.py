@@ -3,8 +3,7 @@ import re
 import numpy as np
 import tifffile
 import warnings
-from skimage import segmentation, morphology, measure
-from skimage.filters import threshold_otsu
+from skimage import segmentation, morphology, measure, filters
 from scipy import ndimage as ndi
 import networkx as nx
 
@@ -59,6 +58,12 @@ def segment_chnl_stack(path_to_phase_channel_stack,
 	tifffile.imwrite(path, segmented_imgs)
 
 
+def overlap(bbox1, bbox2):
+    """Checks if two bounding boxes overlap."""
+    x1_min, y1_min, x1_max, y1_max = bbox1
+    x2_min, y2_min, x2_max, y2_max = bbox2
+    return not (x1_max < x2_min or x1_min > x2_max or y1_max < y2_min or y1_min > y2_max)
+
 def segment_image(image,
                   OTSU_threshold=1.5,
                   first_opening=5,
@@ -66,79 +71,84 @@ def segment_image(image,
                   second_opening_size=1,
                   min_cell_area=200,
                   max_cell_area=700,
-                  small_merge_area_threshold=50):
-    """Segments an image with size filtering and improved structure."""
+                  small_merge_area_threshold=50,
+                  min_axis_ratio=0.04):
+    """Segments an image with size and shape filtering, and improved structure."""
 
+    # 1. Thresholding and Initial Morphological Operations
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            thresh = threshold_otsu(image)
+            thresh = filters.threshold_otsu(image)
+        thresholded = image > OTSU_threshold * thresh
+        morph = morphology.binary_opening(thresholded, morphology.disk(first_opening))
+
+        if np.amax(morph) == 0:
+            return np.zeros_like(image)
+
+        distance = ndi.distance_transform_edt(morph)
+        distance_thresh = distance >= distance_threshold
+        distance_opened = morphology.binary_opening(distance_thresh, morphology.disk(second_opening_size))
+
+        labeled, num_labels = morphology.label(distance_opened, connectivity=1, return_num=True)
+        if num_labels == 0:
+            return np.zeros_like(image)
+
+        markers = morphology.label(labeled, connectivity=1)
+        if np.amax(markers) == 0:
+            return np.zeros_like(image)
+
     except Exception as e:
-        print(f"Error in thresholding: {e}")
+        print(f"Error in initial processing: {e}")
         return np.zeros_like(image)
 
-    thresholded = image > OTSU_threshold * thresh
-
-    morph = morphology.binary_opening(thresholded, morphology.disk(first_opening))
-
-    if np.amax(morph) == 0:
-        return np.zeros_like(image)
-
-    distance = ndi.distance_transform_edt(morph)
-
-    distance_thresh = distance >= distance_threshold
-
-    distance_opened = morphology.binary_opening(distance_thresh, morphology.disk(second_opening_size))
-
-    cleared = segmentation.clear_border(distance_opened)
-
-    labeled, num_labels = morphology.label(cleared, connectivity=1, return_num=True)
-
-    if num_labels == 0:
-        return np.zeros_like(image)
-
-    markers = morphology.label(labeled, connectivity=1)
-
-    if np.amax(markers) == 0:
-        return np.zeros_like(image)
-
+    # 2. Watershed Segmentation
     thresholded_watershed = thresholded
-
     try:
         markers[thresholded_watershed == 0] = -1
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             labeled_image = segmentation.random_walker(-1 * image, markers)
         labeled_image[labeled_image == -1] = 0
-    except:
+    except Exception as e:
+        print(f"Error in watershed segmentation: {e}")
         return np.zeros_like(image)
 
-    # Bounding Box Merging
+    # 3. Bounding Box Merging (Small Regions)
     regions = measure.regionprops(labeled_image)
     if regions:
         bboxes = np.array([region.bbox for region in regions])
         areas = np.array([region.area for region in regions])
         graph = nx.Graph()
+
         for i, bbox1 in enumerate(bboxes):
             for j, bbox2 in enumerate(bboxes):
                 if i != j and overlap(bbox1, bbox2) and areas[i] < small_merge_area_threshold and areas[j] < small_merge_area_threshold:
                     graph.add_edge(regions[i].label, regions[j].label)
 
-        # Find connected components (merged regions)
         for component in nx.connected_components(graph):
-            if len(component) > 1:  # Only merge if there's more than one region
+            if len(component) > 1:
                 merged_mask = np.isin(labeled_image, list(component))
                 new_label = np.max(labeled_image) + 1
                 labeled_image[merged_mask] = new_label
-
                 for label in component:
                     labeled_image[labeled_image == label] = 0
 
-        # Relabel after merging
-        labeled_image, num_labels = morphology.label(labeled_image, connectivity=1, return_num=True)
+        labeled_image, _ = morphology.label(labeled_image, connectivity=1, return_num=True)
 
+    # 4. Shape Filtering (Axis Ratio)
+    filtered_labeled_image = np.zeros_like(labeled_image)
+    regions = measure.regionprops(labeled_image)
 
-    # Size Filtering
+    for region in regions:
+        if region.axis_major_length > 0:
+            axis_ratio = region.axis_minor_length / region.axis_major_length
+            if (axis_ratio > min_axis_ratio) | (region.axis_minor_length > 3.5):
+                filtered_labeled_image[region.coords[:, 0], region.coords[:, 1]] = region.label
+
+    labeled_image = filtered_labeled_image
+
+    # 5. Size Filtering (Area)
     if min_cell_area is not None or max_cell_area is not None:
         filtered_labeled_image = np.zeros_like(labeled_image)
         regions = measure.regionprops(labeled_image)
@@ -146,7 +156,6 @@ def segment_image(image,
             area = region.area
             if (min_cell_area is None or area >= min_cell_area) and (max_cell_area is None or area <= max_cell_area):
                 filtered_labeled_image[region.coords[:, 0], region.coords[:, 1]] = region.label
-
         labeled_image = filtered_labeled_image
 
     return labeled_image

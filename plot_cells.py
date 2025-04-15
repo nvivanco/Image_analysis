@@ -39,6 +39,12 @@ def _create_color_dict(data_source):
 
     return color_dict
 
+def mask_from_region(region, image):
+    cell_mask = np.zeros(image.shape, dtype=int)
+    rr, cc = polygon(np.array(region.coords)[:, 0], np.array(region.coords)[:, 1], image.shape)
+    cell_mask[rr, cc] = 1
+    return cell_mask
+
 # Helper functions for plotting
 
 def _plot_mask(ax, mask, color_dict, alpha):
@@ -49,9 +55,7 @@ def _plot_mask(ax, mask, color_dict, alpha):
     ax.imshow(colored_mask, alpha=alpha)
 
 def _plot_cell_contour(ax, phase, region, color):
-    cell_mask = np.zeros(phase.shape, dtype=int)
-    rr, cc = polygon(np.array(region.coords)[:, 0], np.array(region.coords)[:, 1], phase.shape)
-    cell_mask[rr, cc] = 1
+    cell_mask = mask_from_region(region, phase)
     ax.contour(cell_mask, levels=[0.5], colors=[color], linewidths=1)
 
 
@@ -90,6 +94,27 @@ def display_segmentation(path_to_original_stack, mask_path, alpha=0.5, start=0, 
     _add_legend(color_dict)
     _show_and_close_plot(fig)
 
+def display_cells_from_df(path_to_original_stack, cells_df, start=0, end=20):
+    phase_stack = tifffile.imread(path_to_original_stack)
+    num_images = end - start
+    fig, axs = _create_figure_and_axes(phase_stack, num_images)
+    color_dict = _create_color_dict(cells_df)
+
+    for i in range(start, end):
+        phase = phase_stack[i]
+        axs[i - start].imshow(phase, cmap='gray')
+        for cell_id in cells_df['cell_id'].unique():
+            if i in cells_df['time_index'].to_numpy():
+                row = cells_df[(cells_df['cell_id'] == cell_id) & (cells_df['time_index'] == i)].index[0]
+                cell_mask = cells_df.loc[row, 'masks']
+                axs[i - start].contour(cell_mask, levels=[0.5], colors= [color_dict[cell_id]], linewidths=1)
+                y_coord, x_coord = cells_df.loc[row, 'centroids']
+                axs[i - start].scatter(x_coord, y_coord, color=color_dict[cell_id], s=5)
+
+        _set_axes_properties(axs[i - start], i)
+
+    _add_legend(color_dict)
+    return fig
 
 def display_cells_from_dict(path_to_original_stack, cells_dict, start=0, end=20):
     phase_stack = tifffile.imread(path_to_original_stack)
