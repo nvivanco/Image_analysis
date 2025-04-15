@@ -18,7 +18,7 @@ bleach==6.1.0
 build==1.1.1
 cachetools==5.5.0
 cachey==0.2.1
-celltk2==0.4.3
+#celltk2==0.4.3
 certifi==2024.2.2
 cffi==1.17.1
 charset-normalizer==3.3.2
@@ -213,7 +213,7 @@ tenacity==9.0.0
 tensorboard==2.9.1
 tensorboard-data-server==0.6.1
 tensorboard-plugin-wit==1.8.1
-tensorflow==2.16.1
+#tensorflow==2.16.1
 tensorflow-estimator==2.9.0
 tensorflow-io-gcs-filesystem==0.36.0
 tensorflow-macos==2.9.2
