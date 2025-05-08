@@ -13,6 +13,7 @@ from skimage.feature import match_template
 from scipy.signal import find_peaks_cwt
 from PIL import Image, ImageDraw, ImageFont
 import multiprocessing
+import HF
 
 
 def subtract_fov_stack(path_to_mm_channels, FOV, empty_stack_id, ana_peak_ids, method = 'phase', channel_index = 0):
@@ -32,11 +33,14 @@ def subtract_fov_stack(path_to_mm_channels, FOV, empty_stack_id, ana_peak_ids, m
 		saved subtracted images of mm_channels organized by position and mm_channel
 	"""
 
+	#the following first few blocks of code uses inputs to identified directories it will use to run different functions and sets up new directories where files are created into 
+	
 	path_to_subtracted_channels = os.path.join(path_to_mm_channels, 'subtracted')
 	os.makedirs(path_to_subtracted_channels, exist_ok=True)
 	path_to_FOV = os.path.join(path_to_subtracted_channels, 'FOV_' + FOV)
 	os.makedirs(path_to_FOV, exist_ok=True)
 
+	#following code block creates a dict of channels (numbered) from input and reads the tiffFile and the associated FOV and sorts peak IDs 
 	mm3_channels_dict = load_mm_channels(path_to_mm_channels)
 	empty_channel_stack = tifffile.imread(mm3_channels_dict[FOV][empty_stack_id])
 	ana_peak_ids = sorted(ana_peak_ids)  # Sort for repeatability
@@ -44,6 +48,7 @@ def subtract_fov_stack(path_to_mm_channels, FOV, empty_stack_id, ana_peak_ids, m
 
 	# Load images for the peak and get phase images
 	for peak_id in ana_peak_ids:
+		print(peak_id)
 
 		path_to_peak = os.path.join(path_to_FOV, 'region_' + peak_id)
 		os.makedirs(path_to_peak, exist_ok=True)
@@ -141,11 +146,19 @@ def subtract_fluor(params: tuple[np.ndarray, np.ndarray]) -> np.ndarray:
 
 	# check frame size of cropped channel and background, always keep crop channel size the same
 	crop_size = np.shape(channel_with_cells)[:2]
+	print("crop Size")
+	print(crop_size)
+	print("empty_size")
+	print(empty_size)
+
+
+
 	empty_size = np.shape(empty_channel)[:2]
 	if crop_size != empty_size:
 		if crop_size[0] > empty_size[0] or crop_size[1] > empty_size[1]:
 			pad_row_length = max(crop_size[0] - empty_size[0], 0)  # prevent negatives
 			pad_column_length = max(crop_size[1] - empty_size[1], 0)
+			print(pad_column_length)
 			empty_channel = np.pad(
 				empty_channel,
 				[
@@ -235,6 +248,7 @@ def extract_mm_channels(path_to_tcyx_FOVs, chan_w=10, chan_sep=45, crop_wp=10, c
 			ch_text = mm_channel.astype(str)
 			x = mask_corners_dict[mm_channel][2]
 			y = mask_corners_dict[mm_channel][1]
+			print(x, y, ch_text)
 			draw.text((x, y), text=ch_text, font=font, fill='red')
 		final_image = np.array(pil_image)
 		plt.figure()
@@ -545,15 +559,38 @@ def hyperstack_tif_tcyx(root_dir, experiment_name, c=0):
 	Args:
 	input_dir: parent directory.
 	experiment_name: The desired experiment name.
+	Updated 05/08/25 to ask user if they want the files to be saved in a specific directorty
+	not implemented the cleanest so asks for user to select directory with experiment name 
+	in order to work properly
 	"""
 	root = Path(root_dir)
 	input_dirs = [str(path) for path in root.glob('**//Pos*') if path.is_dir()]
 
+	
+	user_input = input('do you want to save into a specific folder? (Y/N)')
+	if user_input.lower() == 'y':
+		
+		#select which directory (folder) you want to save the output to
+		print('select save directory')
+		save_dir = HF.select_directory()
+		
+		#select folder containing experiment name as basename of path (there's probably an easier way to get this)
+		print('select experiment name directory')
+		experiment_dir = HF.select_directory()
+
+		#the following just creates the appropriate experiment name and direcotries in the folder you want it made 
+		experiment_name = os.path.basename(experiment_dir)
+		experiment_save_dir = os.path.join(save_dir, experiment_name)
+		os.makedirs(experiment_save_dir, exist_ok=True)
+		output_dir_path = os.path.join(experiment_save_dir, 'renamed')
+	else:
+		output_dir_path = os.path.join(root_dir, 'renamed')
+
 	# Create output directory if it doesn't exist
-	output_dir_path = os.path.join(root_dir, 'renamed')
+
 	os.makedirs(output_dir_path, exist_ok=True)
 
-	hyperstacked_path = os.path.join(root_dir, 'hyperstacked')
+	hyperstacked_path = os.path.join(output_dir_path, 'hyperstacked')
 	os.makedirs(hyperstacked_path, exist_ok=True)
 
 	time_clear_dict = {}
