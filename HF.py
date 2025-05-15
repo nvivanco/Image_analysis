@@ -7,10 +7,13 @@ import tkinter as tk
 from tkinter import filedialog
 
 
-""""
+"""
 the following function is used to open up a gui window that allows 
 the user to select a directory and returns the path of the directory selected 
-""""
+
+"""
+
+
 def select_directory():
     root = tk.Tk()
     root.withdraw()
