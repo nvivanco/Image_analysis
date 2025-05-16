@@ -1,5 +1,6 @@
 import os
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import re
 from pathlib import Path
@@ -213,17 +214,24 @@ def load_mm_channels(input_dir):
 
 
 def extract_mm_channels(path_to_tcyx_FOVs, chan_w=10, chan_sep=45, crop_wp=10, chan_lp=10, chan_snr=1):
+	"""
+	Updated 05/15/25: made changes so that when a mask is made it will create a csv 
+	of the channels, their ID, and coordinates to be made to track channels further down in pipeline 
+	"""
+	
 	# create an output directory for microfluidic_channels
 	path_to_mm_channels = os.path.join(path_to_tcyx_FOVs, 'mm_channels')
 	os.makedirs(path_to_mm_channels, exist_ok=True)
 
 	file_group = org_by_timepoint([path_to_tcyx_FOVs])
 	font = ImageFont.truetype('/System/Library/Fonts/ArialHB.ttc', 15)
+	channels_df_col = ['channel_ID', 'x', 'y', 'cells']
 
 	for position in file_group.keys():
 		file_path = file_group[position]['hyperstacked']['stacked']
 		FOV_stack_tcyx = tifffile.imread(file_path)
 		first_phase_image = FOV_stack_tcyx[0, 0, :, :]
+		channels_df = pd.DataFrame(columns = channels_df_col)
 
 		chnl_loc_dict = find_channel_locs(first_phase_image, chan_w, chan_sep, crop_wp, chan_snr)
 		image_rows = first_phase_image.shape[0]
@@ -248,7 +256,7 @@ def extract_mm_channels(path_to_tcyx_FOVs, chan_w=10, chan_sep=45, crop_wp=10, c
 			ch_text = mm_channel.astype(str)
 			x = mask_corners_dict[mm_channel][2]
 			y = mask_corners_dict[mm_channel][1]
-			print(x, y, ch_text)
+			channels_df.loc[len(channels_df)] = [int(ch_text), int(x), int(y), 0]
 			draw.text((x, y), text=ch_text, font=font, fill='red')
 		final_image = np.array(pil_image)
 		plt.figure()
@@ -261,6 +269,9 @@ def extract_mm_channels(path_to_tcyx_FOVs, chan_w=10, chan_sep=45, crop_wp=10, c
 		path = os.path.join(path_to_mm_channels, filename)
 		tifffile.imwrite(path, final_image)
 
+		csv_path = path_to_mm_channels + f'FOV{position}.csv' 
+		channels_df.to_csv(csv_path, index=False)
+		
 		print("saving sliced microfluidic channels as tcyx stacks")
 		for trench in mask_corners_dict.keys():
 			y1, y2, x1, x2 = mask_corners_dict[trench]
@@ -535,7 +546,7 @@ def detect_clear_image(image):
         return True
 
 
-def drift_correct(root_dir, experiment_name, c=0):
+def drift_correct(root_dir, experiment_name, pos_list, c=0, ):
 	"""
 	Arg
 	root_dir: parent directory containing multiple 'Pos#' directories,
@@ -547,14 +558,14 @@ def drift_correct(root_dir, experiment_name, c=0):
 
 	"""
 
-	hyperstacked_path, time_dict = hyperstack_tif_tcyx(root_dir, experiment_name, c)
+	hyperstacked_path, time_dict = hyperstack_tif_tcyx(root_dir, experiment_name, pos_list , c )
 
 	drift_corrected_path = drift_correction_napari(hyperstacked_path)
 
 	return drift_corrected_path
 
 
-def hyperstack_tif_tcyx(root_dir, experiment_name, c=0):
+def hyperstack_tif_tcyx(root_dir, experiment_name, pos_list, c=0):
 	"""Renames TIFF files without deleting originals.
 	Args:
 	input_dir: parent directory.
@@ -562,9 +573,16 @@ def hyperstack_tif_tcyx(root_dir, experiment_name, c=0):
 	Updated 05/08/25 to ask user if they want the files to be saved in a specific directorty
 	not implemented the cleanest so asks for user to select directory with experiment name 
 	in order to work properly
+    updated 05/15/2025
+	pos_list: a list of positions that you want the analysis to work on to save time when not needing to
+	analyze every image. format should be 'root_dir/Posx'. If the list is empty it will run through 
+	everything as normal	
 	"""
 	root = Path(root_dir)
 	input_dirs = [str(path) for path in root.glob('**//Pos*') if path.is_dir()]
+
+	if pos_list:
+		input_dirs = [pos for pos in input_dirs if pos in pos_list]
 
 	
 	user_input = input('do you want to save into a specific folder? (Y/N)')
