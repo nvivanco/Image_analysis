@@ -147,10 +147,6 @@ def subtract_fluor(params: tuple[np.ndarray, np.ndarray]) -> np.ndarray:
 
 	# check frame size of cropped channel and background, always keep crop channel size the same
 	crop_size = np.shape(channel_with_cells)[:2]
-	print("crop Size")
-	print(crop_size)
-	print("empty_size")
-	print(empty_size)
 
 
 
@@ -601,14 +597,14 @@ def hyperstack_tif_tcyx(root_dir, experiment_name, pos_list, c=0):
 		experiment_save_dir = os.path.join(save_dir, experiment_name)
 		os.makedirs(experiment_save_dir, exist_ok=True)
 		output_dir_path = os.path.join(experiment_save_dir, 'renamed')
+		hyperstacked_path = os.path.join(experiment_save_dir, 'hyperstacked')
 	else:
 		output_dir_path = os.path.join(root_dir, 'renamed')
+		hyperstacked_path = os.path.join(root_dir, 'hyperstacked')
 
 	# Create output directory if it doesn't exist
 
 	os.makedirs(output_dir_path, exist_ok=True)
-
-	hyperstacked_path = os.path.join(output_dir_path, 'hyperstacked')
 	os.makedirs(hyperstacked_path, exist_ok=True)
 
 	time_clear_dict = {}
@@ -741,7 +737,7 @@ def calculate_line_angle(x1, y1, x2, y2):
 	dx = x2 - x1
 	dy = y2 - y1
 	angle = np.arctan2(dy, dx) * 180 / np.pi
-	return angle
+	return -angle
 
 
 def find_lines(img):
