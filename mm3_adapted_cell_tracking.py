@@ -187,6 +187,9 @@ def make_lineage_chnl_stack(labeled_stack: str,
         if not current_regions:
             continue
 
+        # Lost tracked regions are still present here
+        #plot_region_of_interest(image_data_seg, t, current_regions)
+
         if not previous_cells:
             if t == start_frame:  # Initialize only at the specified start time
                 for region in current_regions:
@@ -203,16 +206,22 @@ def make_lineage_chnl_stack(labeled_stack: str,
             cell_id: cell for cell_id, cell in previous_cells.items() if cell.is_active
         }
 
+
         if active_previous_cells:
             matches, unmatched_current, unmatched_previous, cell_leaves = link_regions(
                 current_regions, active_previous_cells, t, cells, cell_leaves,  # Pass active cells ONLY
                 fov_id, peak_id, pxl2um, cost_threshold=150
             )
+
             for cell_id in matches:
                 cells[cell_id].last_meaningful_update = t
             previous_cells = cells
 
-            #visualize_matches(image_data_seg, t, matches, unmatched_current, unmatched_previous, active_previous_cells, current_regions)
+            # extract regions of matched cells
+            #if t < 37:
+                #for cell_id, cell in previous_cells.items():
+                #    plot_region_of_interest(image_data_seg, t, cell.regions)
+
 
             # Handle Unmatched with lookback and lookforward
             active_unmatched_previous = {
@@ -220,9 +229,26 @@ def make_lineage_chnl_stack(labeled_stack: str,
                 cell_id in active_previous_cells
             }
 
+            #check cell_leaves for lost cells in unmatched_previous
+            for cell_id in unmatched_previous:
+                cell = previous_cells[cell_id]
+                if (t < 37):
+                    plot_region_of_interest(image_data_seg, t, [cell.regions[-1]])
+
+            #check cell_leaves for lost cells in cell leaves
+            # for cell_id in cell_leaves:
+            #     last_cell = cells[cell_id]
+            #     if (t < 37):
+            #         plot_region_of_interest(image_data_seg, (t-1), [last_cell.regions[-1]])
+
+            # extract regions of unmatched current cells
+            # unmatched_current_regions = [current_regions[i] for i in unmatched_current]
+            # if (t < 37) & (len(unmatched_current_regions)> 0):
+            #     plot_region_of_interest(image_data_seg, t, unmatched_current_regions)
+
+
             for i in list(unmatched_current):
                 current_region = current_regions[i]
-
                 # Check if the current region has already been assigned to an active cell
                 already_assigned = False
                 for cell in cells.values():
@@ -256,6 +282,7 @@ def make_lineage_chnl_stack(labeled_stack: str,
                         centroid_dist = np.linalg.norm(
                             np.array(current_region.centroid) - np.array(prev_region.centroid)
                         )
+
                         area_diff = abs(current_region.area - prev_region.area)
                         cost = centroid_dist + 0.1 * area_diff
                         if cost < min_lookback_cost:
@@ -387,6 +414,19 @@ def make_lineage_chnl_stack(labeled_stack: str,
     # return the dictionary with all the cells
     return cells
 
+def plot_region_of_interest(image_data_seg, t, regions):
+    fig, axes = plt.subplots(1, 1, figsize=(5, 8))
+    # Plot region of interest on current frame
+    axes.imshow(image_data_seg[t], cmap='gray')
+    axes.set_title(f"Current Frame (t={t})")
+    for region in regions:
+        bbox = region.bbox
+        rect = patches.Rectangle((bbox[1], bbox[0]), bbox[3] - bbox[1], bbox[2] - bbox[0],
+                                 linewidth=1, edgecolor='r', facecolor='none')
+        axes.add_patch(rect)
+        axes.plot(region.centroid[1], region.centroid[0], 'ro', label="region of interest")
+    axes.legend()
+    axes.set_aspect('equal', adjustable='box')
 
 def visualize_matches(image_data_seg, t, matches, unmatched_current, unmatched_previous, previous_cells, current_regions):
     """Visualizes matched and unmatched regions between frames."""
@@ -651,9 +691,15 @@ def link_regions(current_regions, previous_cells, t, cells, cell_leaves, fov_id,
     for i, current_region in enumerate(current_regions):
         for j, (prev_cell_id, prev_cell_object) in enumerate(previous_cells.items()):
             prev_region = prev_cell_object.regions[-1]
+            # only track y axis of centroid, centroid is (y, x) tuple
+            # y should be getting smaller, since cells keep getting pushed upwards by nascent cells
+            change_in_y = prev_region.centroid[0] - current_region.centroid[0]
             centroid_dist = np.linalg.norm(np.array(current_region.centroid) - np.array(prev_region.centroid))
             area_diff = abs(current_region.area - prev_region.area)
             cost = centroid_dist + 0.1 * area_diff  # Adjust weight (0.1) as needed
+            if change_in_y < -3:
+                penalty_factor = 1 + abs(change_in_y + 3) * 0.2  # Example
+                cost += centroid_dist * penalty_factor
             cost_matrix[i, j] = cost
 
     row_ind, col_ind = linear_sum_assignment(cost_matrix)
