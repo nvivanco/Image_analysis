@@ -6,11 +6,11 @@ from scipy.signal import find_peaks
 from scipy.optimize import curve_fit, OptimizeWarning
 from numba import jit
 
-def plot_growth_analysis(all_cells_pd, cell_id, time_col, length_col, prominence=0.3, distance=3, window_size=3):
+def plot_growth_analysis(all_cells_pd, cell_id, cell_id_col, time_col, length_col, prominence=0.3, distance=3, window_size=3):
 
     """Analyzes and plots cell growth data with exponential fits for detected phases."""
 
-    cell_df = all_cells_pd[all_cells_pd['cell_id'] == cell_id].copy()
+    cell_df = all_cells_pd[all_cells_pd[cell_id_col] == cell_id].copy()
 
     growth_phases = detect_growth_phases(cell_df, time_col, length_col, prominence, distance, window_size)
 

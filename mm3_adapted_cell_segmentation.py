@@ -58,11 +58,6 @@ def segment_chnl_stack(path_to_phase_channel_stack,
 	tifffile.imwrite(path, segmented_imgs)
 
 
-def overlap(bbox1, bbox2):
-    """Checks if two bounding boxes overlap."""
-    x1_min, y1_min, x1_max, y1_max = bbox1
-    x2_min, y2_min, x2_max, y2_max = bbox2
-    return not (x1_max < x2_min or x1_min > x2_max or y1_max < y2_min or y1_min > y2_max)
 
 def segment_image(image,
                   OTSU_threshold=1.5,
