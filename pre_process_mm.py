@@ -390,48 +390,55 @@ def midpoint_distance(line, center):
     distance = np.sqrt((midpoint_x - center[0])**2 + (midpoint_y - center[1])**2)
     return distance
 
-def crop_around_central_flow(h_lines, w, h, growth_channel_length=400, threshold=300, bottom_margin=0.9):
+def crop_around_central_flow(h_lines, w, h, growth_channel_length=400, threshold=700):
     """
     Crops an image around the central flow channel based on detected horizontal lines.
 
     Args:
         h_lines: A list of detected horizontal lines, where each line is represented
-                as a tuple of coordinates ((x1, y1), (x2, y2)).
+                 as a NumPy array in the format [[x1, y1, x2, y2]].
         w: Width of the image.
         h: Height of the image.
         growth_channel_length: Desired length of the cropped region along the flow channel.
         threshold: Maximum distance of a line from the image center to be considered.
-        bottom_margin: Fraction of the image height to exclude from consideration
-                       for horizontal lines (e.g., 0.2 for 20% from the bottom).
 
     Returns:
         A tuple containing the start and end indices for cropping along the vertical axis
-        (y-axis) if lines are found, otherwise None.
+        (y-axis) if a suitable line is found, otherwise None.
     """
 
     center_x, center_y = w // 2, h // 2
-    bottom_exclusion_height = int(h * bottom_margin)
-    bottom_final = h
-    filtered_lines = []
+    closest_line = None
+    min_difference = float('inf')
 
     if h_lines:
+        y_coordinates = [line[0][1] for line in h_lines]
+        median_y = np.median(y_coordinates)
+
+        # Find the line closest to the median y-coordinate
         for line in h_lines:
-            distance = midpoint_distance(line, (center_x, center_y))
-            if distance <= threshold and line[0][1] < bottom_exclusion_height:
-                filtered_lines.append(line)
-            elif line[0][1] >= bottom_exclusion_height:
-                bottom_final = bottom_exclusion_height
+            y_value = line[0][1]
+            difference = abs(y_value - median_y)
+            if difference < min_difference:
+                min_difference = difference
+                closest_line = line
 
-        if filtered_lines:
-            x1, y1, x2, y2 = filtered_lines[0][0]
+        # Filter lines based on distance from the center and the threshold
+        # We'll consider the 'closest_line' found earlier as the primary candidate
+        # and then apply the threshold.
+        if closest_line is not None:
+            y_of_closest_line = closest_line[0][1]
+            if abs(y_of_closest_line - center_y) <= threshold:
+                # Determine crop boundaries
+                crop_start = max(y_of_closest_line, 0)
+                crop_end = min(y_of_closest_line + growth_channel_length, h) # Ensure crop_end doesn't exceed image height
 
-            # Determine crop boundaries (adjust based on channel orientation)
-            crop_start = max(y1, 0)
-            crop_end = min(y1 + growth_channel_length, bottom_final)
-
-            return crop_start, crop_end
+                return crop_start, crop_end
+            else:
+                print(f"The closest line (y={y_of_closest_line}) is outside the {threshold} pixel threshold from the center (y={center_y}).")
+                return None
         else:
-            print(f"No lines found within {threshold} pixels from the center and above the bottom margin.")
+            print("No suitable line found after median selection.")
             return None
     else:
         print("No horizontal lines were detected in the image.")
@@ -482,7 +489,7 @@ def rotate_stack(path_to_stack, c=0, growth_channel_length=400, closed_ends = 'd
 		# find spot
 
 		# Crop around the central flow
-		crop_start, crop_end = crop_around_central_flow(rot_horizontal_lines, w, h, growth_channel_length, 500)
+		crop_start, crop_end = crop_around_central_flow(rot_horizontal_lines, w, h, growth_channel_length, 700)
 
 		# Rotate and crop the entire stack
 		rotated_stack = apply_image_rotation(stacked_img, rotation_angle, closed_ends)
@@ -766,7 +773,7 @@ def apply_image_rotation(image_stack, rotation_angle, closed_ends = 'down'):
 		center = (w // 2, h // 2)
 		print('Rotation angle:')
 		print(rotation_angle)
-		M = cv2.getRotationMatrix2D(center, rotation_angle-adjusting_angle, 1.0)
+		M = cv2.getRotationMatrix2D(center, -rotation_angle-adjusting_angle, 1.0)
 		for time in range(image_stack.shape[0]):
 			for channel in range(image_stack.shape[1]):
 				rotated_stack[time, channel] = cv2.warpAffine(image_stack[time, channel], M, (w, h))
@@ -774,14 +781,14 @@ def apply_image_rotation(image_stack, rotation_angle, closed_ends = 'down'):
 	elif image_stack.ndim == 3:
 		h, w = image_stack.shape[1:]
 		center = (w // 2, h // 2)
-		M = cv2.getRotationMatrix2D(center, rotation_angle-adjusting_angle, 1.0)
+		M = cv2.getRotationMatrix2D(center, -rotation_angle-adjusting_angle, 1.0)
 		for channel in range(image_stack.shape[0]):
 			rotated_stack[channel] = cv2.warpAffine(image_stack[channel], M, (w, h))
 
 	elif image_stack.ndim == 2:
 		h, w = image_stack.shape
 		center = (w // 2, h // 2)
-		M = cv2.getRotationMatrix2D(center, rotation_angle-adjusting_angle, 1.0)
+		M = cv2.getRotationMatrix2D(center, -rotation_angle-adjusting_angle, 1.0)
 		rotated_stack = cv2.warpAffine(image_stack, M, (w, h))
 
 	return rotated_stack
