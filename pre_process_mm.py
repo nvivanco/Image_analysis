@@ -1,5 +1,6 @@
 import os
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import re
 from pathlib import Path
@@ -13,6 +14,7 @@ from skimage.feature import match_template
 from scipy.signal import find_peaks_cwt
 from PIL import Image, ImageDraw, ImageFont
 import multiprocessing
+import HF
 
 
 def subtract_fov_stack(path_to_mm_channels, FOV, empty_stack_id, ana_peak_ids, method = 'phase', channel_index = 0):
@@ -32,11 +34,14 @@ def subtract_fov_stack(path_to_mm_channels, FOV, empty_stack_id, ana_peak_ids, m
 		saved subtracted images of mm_channels organized by position and mm_channel
 	"""
 
+	#the following first few blocks of code uses inputs to identified directories it will use to run different functions and sets up new directories where files are created into 
+	
 	path_to_subtracted_channels = os.path.join(path_to_mm_channels, 'subtracted')
 	os.makedirs(path_to_subtracted_channels, exist_ok=True)
 	path_to_FOV = os.path.join(path_to_subtracted_channels, 'FOV_' + FOV)
 	os.makedirs(path_to_FOV, exist_ok=True)
 
+	#following code block creates a dict of channels (numbered) from input and reads the tiffFile and the associated FOV and sorts peak IDs 
 	mm3_channels_dict = load_mm_channels(path_to_mm_channels)
 	empty_channel_stack = tifffile.imread(mm3_channels_dict[FOV][empty_stack_id])
 	ana_peak_ids = sorted(ana_peak_ids)  # Sort for repeatability
@@ -44,6 +49,7 @@ def subtract_fov_stack(path_to_mm_channels, FOV, empty_stack_id, ana_peak_ids, m
 
 	# Load images for the peak and get phase images
 	for peak_id in ana_peak_ids:
+		print(peak_id)
 
 		path_to_peak = os.path.join(path_to_FOV, 'region_' + peak_id)
 		os.makedirs(path_to_peak, exist_ok=True)
@@ -141,11 +147,15 @@ def subtract_fluor(params: tuple[np.ndarray, np.ndarray]) -> np.ndarray:
 
 	# check frame size of cropped channel and background, always keep crop channel size the same
 	crop_size = np.shape(channel_with_cells)[:2]
+
+
+
 	empty_size = np.shape(empty_channel)[:2]
 	if crop_size != empty_size:
 		if crop_size[0] > empty_size[0] or crop_size[1] > empty_size[1]:
 			pad_row_length = max(crop_size[0] - empty_size[0], 0)  # prevent negatives
 			pad_column_length = max(crop_size[1] - empty_size[1], 0)
+			print(pad_column_length)
 			empty_channel = np.pad(
 				empty_channel,
 				[
@@ -200,17 +210,24 @@ def load_mm_channels(input_dir):
 
 
 def extract_mm_channels(path_to_tcyx_FOVs, chan_w=10, chan_sep=45, crop_wp=10, chan_lp=10, chan_snr=1):
+	"""
+	Updated 05/15/25: made changes so that when a mask is made it will create a csv 
+	of the channels, their ID, and coordinates to be made to track channels further down in pipeline 
+	"""
+	
 	# create an output directory for microfluidic_channels
 	path_to_mm_channels = os.path.join(path_to_tcyx_FOVs, 'mm_channels')
 	os.makedirs(path_to_mm_channels, exist_ok=True)
 
 	file_group = org_by_timepoint([path_to_tcyx_FOVs])
 	font = ImageFont.truetype('/System/Library/Fonts/ArialHB.ttc', 15)
+	channels_df_col = ['channel_ID', 'x', 'y', 'cells']
 
 	for position in file_group.keys():
 		file_path = file_group[position]['hyperstacked']['stacked']
 		FOV_stack_tcyx = tifffile.imread(file_path)
 		first_phase_image = FOV_stack_tcyx[0, 0, :, :]
+		channels_df = pd.DataFrame(columns = channels_df_col)
 
 		chnl_loc_dict = find_channel_locs(first_phase_image, chan_w, chan_sep, crop_wp, chan_snr)
 		image_rows = first_phase_image.shape[0]
@@ -235,6 +252,7 @@ def extract_mm_channels(path_to_tcyx_FOVs, chan_w=10, chan_sep=45, crop_wp=10, c
 			ch_text = mm_channel.astype(str)
 			x = mask_corners_dict[mm_channel][2]
 			y = mask_corners_dict[mm_channel][1]
+			channels_df.loc[len(channels_df)] = [int(ch_text), int(x), int(y), 0]
 			draw.text((x, y), text=ch_text, font=font, fill='red')
 		final_image = np.array(pil_image)
 		plt.figure()
@@ -247,6 +265,9 @@ def extract_mm_channels(path_to_tcyx_FOVs, chan_w=10, chan_sep=45, crop_wp=10, c
 		path = os.path.join(path_to_mm_channels, filename)
 		tifffile.imwrite(path, final_image)
 
+		csv_path = path_to_mm_channels + f'FOV{position}.csv' 
+		channels_df.to_csv(csv_path, index=False)
+		
 		print("saving sliced microfluidic channels as tcyx stacks")
 		for trench in mask_corners_dict.keys():
 			y1, y2, x1, x2 = mask_corners_dict[trench]
@@ -528,7 +549,7 @@ def detect_clear_image(image):
         return True
 
 
-def drift_correct(root_dir, experiment_name, c=0):
+def drift_correct(root_dir, experiment_name, pos_list, c=0, ):
 	"""
 	Arg
 	root_dir: parent directory containing multiple 'Pos#' directories,
@@ -540,27 +561,57 @@ def drift_correct(root_dir, experiment_name, c=0):
 
 	"""
 
-	hyperstacked_path, time_dict = hyperstack_tif_tcyx(root_dir, experiment_name, c)
+	hyperstacked_path, time_dict = hyperstack_tif_tcyx(root_dir, experiment_name, pos_list , c )
 
 	drift_corrected_path = drift_correction_napari(hyperstacked_path)
 
 	return drift_corrected_path
 
 
-def hyperstack_tif_tcyx(root_dir, experiment_name, c=0):
+def hyperstack_tif_tcyx(root_dir, experiment_name, pos_list, c=0):
 	"""Renames TIFF files without deleting originals.
 	Args:
 	input_dir: parent directory.
 	experiment_name: The desired experiment name.
+	Updated 05/08/25 to ask user if they want the files to be saved in a specific directorty
+	not implemented the cleanest so asks for user to select directory with experiment name 
+	in order to work properly
+    updated 05/15/2025
+	pos_list: a list of positions that you want the analysis to work on to save time when not needing to
+	analyze every image. format should be 'root_dir/Posx'. If the list is empty it will run through 
+	everything as normal	
 	"""
 	root = Path(root_dir)
 	input_dirs = [str(path) for path in root.glob('**//Pos*') if path.is_dir()]
 
-	# Create output directory if it doesn't exist
-	output_dir_path = os.path.join(root_dir, 'renamed')
-	os.makedirs(output_dir_path, exist_ok=True)
+	if pos_list:
+		input_dirs = [pos for pos in input_dirs if pos in pos_list]
 
-	hyperstacked_path = os.path.join(root_dir, 'hyperstacked')
+	
+	user_input = input('do you want to save into a specific folder? (Y/N)')
+	if user_input.lower() == 'y':
+		
+		#select which directory (folder) you want to save the output to
+		print('select save directory')
+		save_dir = HF.select_directory()
+		
+		#select folder containing experiment name as basename of path (there's probably an easier way to get this)
+		print('select experiment name directory')
+		experiment_dir = HF.select_directory()
+
+		#the following just creates the appropriate experiment name and direcotries in the folder you want it made 
+		experiment_name = os.path.basename(experiment_dir)
+		experiment_save_dir = os.path.join(save_dir, experiment_name)
+		os.makedirs(experiment_save_dir, exist_ok=True)
+		output_dir_path = os.path.join(experiment_save_dir, 'renamed')
+		hyperstacked_path = os.path.join(experiment_save_dir, 'hyperstacked')
+	else:
+		output_dir_path = os.path.join(root_dir, 'renamed')
+		hyperstacked_path = os.path.join(root_dir, 'hyperstacked')
+
+	# Create output directory if it doesn't exist
+
+	os.makedirs(output_dir_path, exist_ok=True)
 	os.makedirs(hyperstacked_path, exist_ok=True)
 
 	time_clear_dict = {}
@@ -693,7 +744,7 @@ def calculate_line_angle(x1, y1, x2, y2):
 	dx = x2 - x1
 	dy = y2 - y1
 	angle = np.arctan2(dy, dx) * 180 / np.pi
-	return angle
+	return -angle
 
 
 def find_lines(img):
