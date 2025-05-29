@@ -150,14 +150,13 @@ def subtract_fluor(params: tuple[np.ndarray, np.ndarray]) -> np.ndarray:
 				empty_channel,
 				[
 					[
-						np.int(0.5 * pad_row_length),
-						pad_row_length - np.int(0.5 * pad_row_length),
+						int(0.5 * pad_row_length),
+						pad_row_length - int(0.5 * pad_row_length),
 					],
 					[
-						np.int(0.5 * pad_column_length),
-						pad_column_length - np.int(0.5 * pad_column_length),
+						int(0.5 * pad_column_length),
+						pad_column_length - int(0.5 * pad_column_length),
 					],
-					[0, 0],
 				],
 				"edge",
 			)
