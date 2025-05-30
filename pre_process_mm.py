@@ -414,6 +414,8 @@ def midpoint_distance(line, center):
 def crop_around_central_flow(h_lines, w, h, growth_channel_length=400, threshold=1600):
 	"""
 	Crops an image around the central flow channel based on detected horizontal lines.
+	05/30/25: Pushed a change that makes it so that images are cropped based on the 
+	Longest detected line
 
 	Args:
 		h_lines: A list of detected horizontal lines, where each line is represented
@@ -503,7 +505,6 @@ def rotate_stack(path_to_stack, c=0, growth_channel_length=400, closed_ends = 'd
 
 		# Identify lines in the rotated image
 		rot_horizontal_lines, rot_vertical_lines = id_lines(ref_rotated_image)
-		# find spot to
 
 		# identify coordinates that will be used to crop the image around
 		# the central flow using the rotated image as a reference 
@@ -826,7 +827,6 @@ def apply_image_rotation(image_stack, rotation_angle, closed_ends = 'down'):
 	# assumes tcyx format
 	if image_stack.ndim == 4:
 		h, w = image_stack.shape[2:]
-		#define center by which images will be rotated 
 		center = (w // 2, h // 2)
 		print('Rotation angle:')
 		print(rotation_angle)
