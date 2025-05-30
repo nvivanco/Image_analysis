@@ -411,52 +411,54 @@ def midpoint_distance(line, center):
     distance = np.sqrt((midpoint_x - center[0])**2 + (midpoint_y - center[1])**2)
     return distance
 
-def crop_around_central_flow(h_lines, w, h, growth_channel_length=400, threshold=300, bottom_margin=0.9):
-    """
-    Crops an image around the central flow channel based on detected horizontal lines.
+def crop_around_central_flow(h_lines, w, h, growth_channel_length=400, threshold=1600):
+	"""
+	Crops an image around the central flow channel based on detected horizontal lines.
 
-    Args:
-        h_lines: A list of detected horizontal lines, where each line is represented
-                as a tuple of coordinates ((x1, y1), (x2, y2)).
-        w: Width of the image.
-        h: Height of the image.
-        growth_channel_length: Desired length of the cropped region along the flow channel.
-        threshold: Maximum distance of a line from the image center to be considered.
-        bottom_margin: Fraction of the image height to exclude from consideration
-                       for horizontal lines (e.g., 0.2 for 20% from the bottom).
+	Args:
+		h_lines: A list of detected horizontal lines, where each line is represented
+					as a NumPy array in the format [[x1, y1, x2, y2]].
+		w: Width of the image.
+		h: Height of the image.
+		growth_channel_length: Desired length of the cropped region along the flow channel.
+		threshold: Maximum distance of a line from the image center to be considered.
 
-    Returns:
-        A tuple containing the start and end indices for cropping along the vertical axis
-        (y-axis) if lines are found, otherwise None.
-    """
+	Returns:
+		A tuple containing the start and end indices for cropping along the vertical axis
+		(y-axis) if a suitable line is found, otherwise None.
+	"""
 
-    center_x, center_y = w // 2, h // 2
-    bottom_exclusion_height = int(h * bottom_margin)
-    bottom_final = h
-    filtered_lines = []
+	center_y = h // 2
+	longest_line = None
+	max_length = 0
+	
+	if h_lines:
+		for line in h_lines:
+			x1, y1, x2, y2 = line[0]
+			length  = np.hypot(x2-x1,y2-y1)
+			if length > max_length:
+				max_length = length
+				longest_line = line
 
-    if h_lines:
-        for line in h_lines:
-            distance = midpoint_distance(line, (center_x, center_y))
-            if distance <= threshold and line[0][1] < bottom_exclusion_height:
-                filtered_lines.append(line)
-            elif line[0][1] >= bottom_exclusion_height:
-                bottom_final = bottom_exclusion_height
-
-        if filtered_lines:
-            x1, y1, x2, y2 = filtered_lines[0][0]
-
-            # Determine crop boundaries (adjust based on channel orientation)
-            crop_start = max(y1, 0)
-            crop_end = min(y1 + growth_channel_length, bottom_final)
-
-            return crop_start, crop_end
-        else:
-            print(f"No lines found within {threshold} pixels from the center and above the bottom margin.")
-            return None
-    else:
-        print("No horizontal lines were detected in the image.")
-        return None
+		# Filter lines based on distance from the center and the threshold
+		# We'll consider the 'closest_line' found earlier as the primary candidate
+		# and then apply the threshold.
+		if longest_line is not None:
+			y_of_longest_line = longest_line[0][1]
+			if abs(y_of_longest_line - center_y) <= threshold:
+				# Determine crop boundaries
+				crop_start = max(y_of_longest_line, 0)
+				crop_end = min(y_of_longest_line + growth_channel_length, h) # Ensure crop_end doesn't exceed image height
+				return crop_start, crop_end
+			else:
+				print(f"The closest line (y={y_of_longest_line}) is outside the {threshold} pixel threshold from the center (y={center_y}).")
+				return None
+		else:
+			print("No suitable line found after median selection.")
+			return None
+	else:
+		print("No horizontal lines were detected in the image.")
+		return None
 
 def rotate_stack(path_to_stack, c=0, growth_channel_length=400, closed_ends = 'down'):
 	"""Rotates and crops a stack of cyx or tcyx format files.
@@ -482,6 +484,7 @@ def rotate_stack(path_to_stack, c=0, growth_channel_length=400, closed_ends = 'd
 	file_groups = org_by_timepoint([path_to_stack])
 
 	for position in file_groups.keys():
+		print(position)
 		file_path = file_groups[position]['hyperstacked']['stacked']
 		filename = os.path.basename(file_path)
 		stacked_img = tifffile.imread(file_path)
@@ -495,17 +498,19 @@ def rotate_stack(path_to_stack, c=0, growth_channel_length=400, closed_ends = 'd
 		# Calculate rotation angle
 		rotation_angle = calculate_rotation_angle(horizontal_lines)
 
-		# Apply image rotation
+		# Apply image rotation and generate new image
 		ref_rotated_image = apply_image_rotation(ref_phase_img, rotation_angle, closed_ends)
 
 		# Identify lines in the rotated image
 		rot_horizontal_lines, rot_vertical_lines = id_lines(ref_rotated_image)
-		# find spot
+		# find spot to
 
-		# Crop around the central flow
-		crop_start, crop_end = crop_around_central_flow(rot_horizontal_lines, w, h, growth_channel_length, 500)
+		# identify coordinates that will be used to crop the image around
+		# the central flow using the rotated image as a reference 
+		crop_start, crop_end = crop_around_central_flow(rot_horizontal_lines, w, h, growth_channel_length, 2000)
 
-		# Rotate and crop the entire stack
+		# Rotate and crop the entire stack, cropping appears to be done only 
+		# by inputting the crop start and crop end coordinates for the y input
 		rotated_stack = apply_image_rotation(stacked_img, rotation_angle, closed_ends)
 		cropped_stack = rotated_stack[:, :, crop_start:crop_end, :]
 
@@ -648,6 +653,7 @@ def drift_correction_napari(hyperstacked_path):
 	for filename in os.listdir(hyperstacked_path):
 		if filename.endswith('.tif') or filename.endswith('.tiff'):
 			if re.match(r'(.*)_xy(\d+)\.', filename):
+				print(filename)
 				match = re.match(r'(.*)_xy(\d+)\.', filename)
 				experiment, position = match.groups()
 				img_path = os.path.join(hyperstacked_path, filename)
@@ -732,21 +738,25 @@ def unstack_tcyx_to_cyx(path_to_hyperstacked):
 							output_yx_file = Path(xy_dir) / f"{experiment}_t{time_index:04.0f}xy{position}_c{channel_index:04.0f}.tif"
 							tifffile.imwrite(str(output_yx_file), yx_image)
 
-
+#used to calculate (keep positive always)
 def calculate_line_angle(x1, y1, x2, y2):
 	dx = x2 - x1
 	dy = y2 - y1
 	angle = np.arctan2(dy, dx) * 180 / np.pi
-	return -angle
+	return angle
 
-
+# this is the function that finds all lines using a HoughLines transform
+# it takes in an image transforms it into 8-bit and returns a list of lines
+# each with a start and endpoint coordinate [x1,y1.x2,y2]
 def find_lines(img):
 	normalized_img = (img / img.max() * 255).astype(np.uint8)
 	edges = cv2.Canny(normalized_img, 50, 150)
 	lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 100, minLineLength=130, maxLineGap=100) #max line gap is going to depend on pixel binning. currently set for 1x1 bin
 	return lines
 
-
+# this function finds all the lines in the image using find_lines
+# then it filters out those lines into vertical and horizontal lines 
+# filter is done by checking the angle of those lines 
 def id_lines(img):
 	lines = find_lines(img)
 	h_lines = []
@@ -766,6 +776,9 @@ def id_lines(img):
 				break
 	return h_lines, v_lines
 
+#this is the function that calculates the angle to be rotated. 
+#this is the one that should be changed to affect rotation
+# it calculates the angles of every line then finds the average angle 
 
 def calculate_rotation_angle(lines):
 	"""calculate rotation angle based on phase image"""
@@ -778,7 +791,7 @@ def calculate_rotation_angle(lines):
 	average_angle = sum(angles) / len(angles)
 	return -average_angle
 
-
+#this function plots a list of lines over an image 
 def plot_lines(original_img, lines):
 	plt.figure()
 	plt.imshow(original_img, cmap='gray')
@@ -810,10 +823,10 @@ def apply_image_rotation(image_stack, rotation_angle, closed_ends = 'down'):
 	if closed_ends == 'up':
 		adjusting_angle = 180
 
-
 	# assumes tcyx format
 	if image_stack.ndim == 4:
 		h, w = image_stack.shape[2:]
+		#define center by which images will be rotated 
 		center = (w // 2, h // 2)
 		print('Rotation angle:')
 		print(rotation_angle)
