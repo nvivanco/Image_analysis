@@ -389,6 +389,7 @@ def midpoint_distance(line, center):
     distance = np.sqrt((midpoint_x - center[0])**2 + (midpoint_y - center[1])**2)
     return distance
 
+
 def crop_around_central_flow(h_lines, w, h, growth_channel_length=400, threshold=700):
     """
     Crops an image around the central flow channel based on detected horizontal lines.
@@ -474,6 +475,7 @@ def rotate_stack(path_to_stack, c=0, growth_channel_length=400, closed_ends = 'd
 
 		# Find lines in the reference phase image
 		h, w = ref_phase_img.shape
+		#test_plot_all(ref_phase_img)
 		horizontal_lines, vertical_lines = id_lines(ref_phase_img)
 		plot_lines(ref_phase_img, horizontal_lines)
 
@@ -488,7 +490,7 @@ def rotate_stack(path_to_stack, c=0, growth_channel_length=400, closed_ends = 'd
 		# find spot
 
 		# Crop around the central flow
-		crop_start, crop_end = crop_around_central_flow(rot_horizontal_lines, w, h, growth_channel_length, 700)
+		crop_start, crop_end = crop_around_central_flow(rot_horizontal_lines, w, h, growth_channel_length, 1600)
 
 		# Rotate and crop the entire stack
 		rotated_stack = apply_image_rotation(stacked_img, rotation_angle, closed_ends)
@@ -697,8 +699,8 @@ def calculate_line_angle(x1, y1, x2, y2):
 
 def find_lines(img):
 	normalized_img = (img / img.max() * 255).astype(np.uint8)
-	edges = cv2.Canny(normalized_img, 50, 150)
-	lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 100, minLineLength=130, maxLineGap=100) #max line gap is going to depend on pixel binning. currently set for 1x1 bin
+	edges = cv2.Canny(normalized_img, 30, 90, 1)
+	lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 100, minLineLength=500, maxLineGap=100) #max line gap is going to depend on pixel binning. currently set for 1x1 bin
 	return lines
 
 
@@ -744,6 +746,16 @@ def plot_lines(original_img, lines):
 		plt.axis('off')
 		plt.draw()
 	plt.show()
+
+def test_plot_all(img):
+	lines = find_lines(img)
+	extracted_lines = []
+	if lines is not None:
+		for line in lines:
+			extracted_lines.append(line)
+	plot_lines(img, extracted_lines)
+
+
 
 
 def apply_image_rotation(image_stack, rotation_angle, closed_ends = 'down'):
