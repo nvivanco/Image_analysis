@@ -185,15 +185,20 @@ def load_mm_channels(input_dir):
 
 	for filename in os.listdir(input_dir):
 		if filename.endswith('.tif') or filename.endswith('.tiff'):
+			# Attempt to match the expected pattern
 			match = re.match(r'FOV(\d+)_region_(\d+)\.', filename)
+
 			if match:
+				# If a match is found, extract FOV and mm_channel_id
 				FOV, mm_channel_id = match.groups()
 
-			path = os.path.join(input_dir, filename)
-			if FOV not in file_groups:
-				file_groups[FOV] = {}
-			if mm_channel_id not in file_groups[FOV]:
-				file_groups[FOV][mm_channel_id] = path
+				path = os.path.join(input_dir, filename)
+
+				if FOV not in file_groups:
+					file_groups[FOV] = {}
+
+				if mm_channel_id not in file_groups[FOV]:
+					file_groups[FOV][mm_channel_id] = path
 
 	return file_groups
 
@@ -207,6 +212,7 @@ def extract_mm_channels(path_to_tcyx_FOVs, chan_w=10, chan_sep=45, crop_wp=10, c
 	font = ImageFont.truetype('/System/Library/Fonts/ArialHB.ttc', 15)
 
 	for position in file_group.keys():
+
 		file_path = file_group[position]['hyperstacked']['stacked']
 		FOV_stack_tcyx = tifffile.imread(file_path)
 		first_phase_image = FOV_stack_tcyx[0, 0, :, :]
@@ -487,6 +493,7 @@ def rotate_stack(path_to_stack, c=0, growth_channel_length=400, closed_ends = 'd
 
 		# Identify lines in the rotated image
 		rot_horizontal_lines, rot_vertical_lines = id_lines(ref_rotated_image)
+		test_plot_all(ref_rotated_image)
 		# find spot
 
 		# Crop around the central flow
@@ -699,8 +706,8 @@ def calculate_line_angle(x1, y1, x2, y2):
 
 def find_lines(img):
 	normalized_img = (img / img.max() * 255).astype(np.uint8)
-	edges = cv2.Canny(normalized_img, 30, 90, 1)
-	lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 100, minLineLength=500, maxLineGap=100) #max line gap is going to depend on pixel binning. currently set for 1x1 bin
+	edges = cv2.Canny(normalized_img, 30, 80, 1)
+	lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 50, minLineLength=100, maxLineGap=100) #max line gap is going to depend on pixel binning. currently set for 1x1 bin
 	return lines
 
 
