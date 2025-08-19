@@ -1,14 +1,17 @@
 import torch
 import torch.nn as nn
 import torch_geometric
-from torch_geometric.data import Data, Dataset
+import torch_geometric.utils as pyg_utils
+from torch_geometric.transforms import BaseTransform
+from torch_geometric.data import Data, Dataset, Batch, InMemoryDataset
 from torch_geometric.nn import GCNConv
 import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score, accuracy_score
 from collections import deque
 import numpy as np
+from torch.nn import BCEWithLogitsLoss
 
-def find_lineage_branches_optimized_v3(graph):
+def find_lineage_branches(graph):
     print("--- Function find_lineage_branches_optimized_v3 started ---")
     all_lineage_segments = []
 
@@ -91,6 +94,99 @@ def find_lineage_branches_optimized_v3(graph):
     print(f"Total lineage segments collected: {len(all_lineage_segments)}")
     print("--- Function find_lineage_branches_optimized_v3 finished ---")
     return all_lineage_segments
+
+
+def create_fov_graph(df_fov, node_feature_cols, device='cpu'):
+    """
+    Creates a single PyG Data object for an entire Field of View (FOV) or trench,
+    including all nodes and all ground-truth lineage edges.
+
+    Args:
+        df_fov (pd.DataFrame): A DataFrame containing all cell data for a single FOV/trench.
+        node_feature_cols (list): List of column names to use as node features.
+        device (str): Device to place tensors on.
+
+    Returns:
+        torch_geometric.data.Data: A single PyG Data object for the entire FOV.
+    """
+    if df_fov.empty:
+        return None
+
+    # Sort the DataFrame to ensure consistent node ordering
+    df_fov = df_fov.sort_values(by=['node_id'])
+
+    # Map original global IDs to new local indices
+    original_global_node_ids = df_fov['node_id'].values
+    global_id_to_local_idx = {global_id: i for i, global_id in enumerate(original_global_node_ids)}
+
+    # Prepare node features and attributes
+    x_data = df_fov[node_feature_cols].values.astype(np.float32)
+    x = torch.tensor(x_data, dtype=torch.float32).to(device)
+    pos_data = df_fov[['centroid_y']].values.astype(np.float32)
+    pos = torch.tensor(pos_data, dtype=torch.float32).to(device)
+    y = torch.tensor(df_fov['numeric_lineage'].values, dtype=torch.long).to(device)
+    node_time_frames = torch.tensor(df_fov['time_frame'].values, dtype=torch.long).to(device)
+
+    # Prepare edge_index
+    source_nodes_local_idx = []
+    target_nodes_local_idx = []
+
+    sorted_time_frames = sorted(df_fov['time_frame'].unique())
+
+    # Build the edge list for all lineages in the FOV
+    for i in range(len(sorted_time_frames) - 1):
+        current_t = sorted_time_frames[i]
+        next_t = sorted_time_frames[i + 1]
+
+        df_current_t = df_fov[df_fov['time_frame'] == current_t]
+        df_next_t = df_fov[df_fov['time_frame'] == next_t]
+
+        # Use dictionaries for efficient lookup
+        current_lineage_to_node = df_current_t.set_index('ground_truth_lineage')['node_id'].to_dict()
+        next_lineage_to_node = df_next_t.set_index('ground_truth_lineage')['node_id'].to_dict()
+
+        for _, row in df_current_t.iterrows():
+            current_ground_truth_lineage = row['ground_truth_lineage']
+            current_global_node_id = row['node_id']
+
+            # Case 1: Continuation (A -> A)
+            if current_ground_truth_lineage in next_lineage_to_node:
+                next_global_node_id = next_lineage_to_node[current_ground_truth_lineage]
+                source_nodes_local_idx.append(global_id_to_local_idx[current_global_node_id])
+                target_nodes_local_idx.append(global_id_to_local_idx[next_global_node_id])
+
+            # Case 2: Division (A -> A.1, A.2)
+            daughter1_lineage = f"{current_ground_truth_lineage}.1"
+            daughter2_lineage = f"{current_ground_truth_lineage}.2"
+
+            if daughter1_lineage in next_lineage_to_node:
+                next_global_node_id = next_lineage_to_node[daughter1_lineage]
+                source_nodes_local_idx.append(global_id_to_local_idx[current_global_node_id])
+                target_nodes_local_idx.append(global_id_to_local_idx[next_global_node_id])
+            if daughter2_lineage in next_lineage_to_node:
+                next_global_node_id = next_lineage_to_node[daughter2_lineage]
+                source_nodes_local_idx.append(global_id_to_local_idx[current_global_node_id])
+                target_nodes_local_idx.append(global_id_to_local_idx[next_global_node_id])
+
+    # Convert edge lists to a PyG tensor
+    if not source_nodes_local_idx:
+        edge_index = torch.empty((2, 0), dtype=torch.long).to(device)
+    else:
+        edge_index = torch.tensor([source_nodes_local_idx, target_nodes_local_idx], dtype=torch.long).to(device)
+
+    # Create the single Data object
+    data = Data(x=x,
+                edge_index=edge_index,
+                y=y,
+                pos=pos,
+                num_nodes=len(df_fov),
+                time_frame=node_time_frames,
+                original_global_node_ids=torch.tensor(original_global_node_ids, dtype=torch.long),
+                experiment_name=df_fov['experiment_name'].iloc[0],
+                fov=df_fov['FOV'].iloc[0],
+                trench_id=df_fov['trench_id'].iloc[0]
+                )
+    return data
 
 def create_candidate_lineage_graph(df_cells, node_feature_cols, device='cpu',
                                    proximity_threshold_1d=50,  # For 1D distance (centroid_y)
@@ -236,245 +332,220 @@ def create_candidate_lineage_graph(df_cells, node_feature_cols, device='cpu',
                 )
     return data
 
-def create_lineage_graph(df_lineage, node_feature_cols, device='cpu'):
-    # The function expects a sub-DataFrame already filtered for a specific lineage branch
-    original_global_node_ids = df_lineage['node_id'].values
-    global_id_to_local_idx = {global_id: i for i, global_id in enumerate(original_global_node_ids)}
 
-    x = torch.tensor(df_lineage[node_feature_cols].values, dtype=torch.float).to(device)
-    y = torch.tensor(df_lineage['numeric_lineage'].values, dtype=torch.long).to(device)
-    pos = torch.tensor(df_lineage['centroid_y'].values, dtype=torch.float).to(device)
-    node_time_frames = torch.tensor(df_lineage['time_frame'].values, dtype=torch.long).to(device)
+def get_all_plausible_negative_candidates(data, radius_threshold, device, num_neg_samples_per_pos_edge=None,
+                                                    positive_edges_to_exclude=None):
+    if positive_edges_to_exclude is None:
+        positive_edges_to_exclude = data.edge_index
 
+    existing_edges_overall_batch_set = set(tuple(e) for e in positive_edges_to_exclude.T.tolist())
 
-    num_nodes = len(df_lineage)
-    if num_nodes == 0:
-        return None
+    plausible_negative_candidates_list = []
 
-    source_nodes_local_idx = []
-    target_nodes_local_idx = []
+    is_batch = hasattr(data, 'ptr')
 
-    sorted_time_frames = sorted(df_lineage['time_frame'].unique())
-
-    for i in range(len(sorted_time_frames) - 1):
-        current_t = sorted_time_frames[i]
-        next_t = sorted_time_frames[i+1]
-
-        df_current_t = df_lineage[df_lineage['time_frame'] == current_t]
-        df_next_t = df_lineage[df_lineage['time_frame'] == next_t]
-
-        current_lineage_to_node = df_current_t.set_index('ground_truth_lineage')['node_id'].to_dict()
-        next_lineage_to_node = df_next_t.set_index('ground_truth_lineage')['node_id'].to_dict()
-
-        for idx, row in df_current_t.iterrows():
-            current_global_node_id = row['node_id']
-            current_ground_truth_lineage = row['ground_truth_lineage']
-
-            if current_ground_truth_lineage in next_lineage_to_node:
-                next_global_node_id = next_lineage_to_node[current_ground_truth_lineage]
-                source_nodes_local_idx.append(global_id_to_local_idx[current_global_node_id])
-                target_nodes_local_idx.append(global_id_to_local_idx[next_global_node_id])
-
-            daughter1_lineage = f"{current_ground_truth_lineage}.1"
-            daughter2_lineage = f"{current_ground_truth_lineage}.2"
-
-            if daughter1_lineage in next_lineage_to_node:
-                next_global_node_id = next_lineage_to_node[daughter1_lineage]
-                source_nodes_local_idx.append(global_id_to_local_idx[current_global_node_id])
-                target_nodes_local_idx.append(global_id_to_local_idx[next_global_node_id])
-            if daughter2_lineage in next_lineage_to_node:
-                next_global_node_id = next_lineage_to_node[daughter2_lineage]
-                source_nodes_local_idx.append(global_id_to_local_idx[current_global_node_id])
-                target_nodes_local_idx.append(global_id_to_local_idx[next_global_node_id])
-
-    if not source_nodes_local_idx:
-        edge_index = torch.empty((2, 0), dtype=torch.long).to(device)
+    if is_batch:
+        num_graphs_in_batch = len(data.ptr) - 1
     else:
-        unique_edges = list(set(zip(source_nodes_local_idx, target_nodes_local_idx)))
-        source_nodes_unique, target_nodes_unique = zip(*unique_edges)
-        edge_index = torch.tensor([list(source_nodes_unique), list(target_nodes_unique)], dtype=torch.long).to(device)
+        num_graphs_in_batch = 1
 
-    data = Data(x=x,
-                edge_index=edge_index,
-                y=y,
-                pos=pos,
-                num_nodes=num_nodes,
-                time_frame=node_time_frames,
-                original_global_node_ids=torch.tensor(original_global_node_ids, dtype=torch.long),
-                root_lineage_branch=df_lineage['ground_truth_lineage'].iloc[0], # The GTL that defines this subgraph
-                start_time_frame=df_lineage['time_frame'].min(),
-                experiment_name=df_lineage['experiment_name'].iloc[0],
-                fov=df_lineage['FOV'].iloc[0],
-                trench_id=df_lineage['trench_id'].iloc[0]
-               )
-    return data
+    for graph_idx in range(num_graphs_in_batch):
+        # Determine nodes for this graph (handling batch and single-graph cases)
+        if is_batch:
+            start_node_idx = data.ptr[graph_idx].item()
+            end_node_idx = data.ptr[graph_idx + 1].item()
+            nodes_in_graph = torch.arange(start_node_idx, end_node_idx, device=device)
+        else:
+            nodes_in_graph = torch.arange(data.num_nodes, device=device)
 
-def generate_local_temporal_negative_samples(data: Data, num_neg_samples_per_pos_edge: float, radius_threshold: float, device='cpu'):
-    """
-    Generates negative samples by considering only cells in consecutive time frames
-    and within a certain spatial radius of potential source nodes, excluding true positives.
+        # Get positions for nodes in the current graph
+        pos_in_graph = data.x[nodes_in_graph, 0:2]  # Assumes x,y positions are first two features
 
-    Args:
-        data (torch_geometric.data.Data): A single graph batch containing x, edge_index, pos, time_frame.
-        num_neg_samples_per_pos_edge (float): Ratio of negative samples to positive samples.
-                                                e.g., 1.0 for 1:1, 2.0 for 2:1.
-        radius_threshold (float): Maximum spatial distance for a potential negative connection.
-        device (str): Device to put tensors on.
+        # Vectorized distance calculation for ALL pairs in the current graph
+        # This is a key optimization.
+        diff_matrix = pos_in_graph.unsqueeze(1) - pos_in_graph.unsqueeze(0)
+        distances = torch.linalg.norm(diff_matrix, dim=-1)
 
-    Returns:
-        torch.Tensor: edge_index of sampled negative connections, shape [2, num_neg_samples].
-    """
-    if data.edge_index.numel() == 0: # No positive edges, no negative samples possible this way
+        # Vectorized filtering for distance threshold
+        within_radius_indices = torch.nonzero(distances < radius_threshold, as_tuple=True)
+
+        # Convert local indices to global batch indices
+        source_indices_in_batch = nodes_in_graph[within_radius_indices[0]]
+        target_indices_in_batch = nodes_in_graph[within_radius_indices[1]]
+
+        candidate_links_in_batch = torch.stack([source_indices_in_batch, target_indices_in_batch], dim=0)
+
+        # Remove self-loops
+        candidate_links_in_batch = candidate_links_in_batch[:,
+                                   candidate_links_in_batch[0] != candidate_links_in_batch[1]]
+
+        # Filter out existing positive links
+        valid_negatives = []
+        for i in range(candidate_links_in_batch.size(1)):
+            src_global = data.original_global_node_ids[candidate_links_in_batch[0, i]].item()
+            tgt_global = data.original_global_node_ids[candidate_links_in_batch[1, i]].item()
+            if (src_global, tgt_global) not in existing_edges_overall_batch_set:
+                valid_negatives.append(candidate_links_in_batch[:, i].tolist())
+
+        if valid_negatives:
+            plausible_negative_candidates_list.append(torch.tensor(valid_negatives, dtype=torch.long).T.to(device))
+
+    if not plausible_negative_candidates_list:
         return torch.empty((2, 0), dtype=torch.long, device=device)
 
-    # Convert tensors to CPU for easier numpy/list processing if needed, then back to device
-    pos_coords = data.pos.cpu().numpy() # Assuming pos is [num_nodes, 2] (y,x) or [num_nodes, 1] (y)
-    time_frames = data.time_frame.cpu().numpy()
-    num_nodes = data.num_nodes
-    existing_edges = set(tuple(e) for e in data.edge_index.cpu().T.tolist()) # Convert to set for fast lookup
+    neg_candidates = torch.cat(plausible_negative_candidates_list, dim=1)
 
-    potential_neg_samples = []
+    # Sample from the plausible negatives to get the desired ratio
+    if num_neg_samples_per_pos_edge is not None and positive_edges_to_exclude.size(1) > 0:
+        num_pos_edges = positive_edges_to_exclude.size(1)
+        num_to_sample = num_pos_edges * num_neg_samples_per_pos_edge
 
-    # Iterate through all possible source nodes
-    for i in range(num_nodes):
-        current_node_time = time_frames[i]
-        current_node_pos = pos_coords[i]
+        if neg_candidates.size(1) > num_to_sample:
+            indices = torch.randperm(neg_candidates.size(1))[:num_to_sample]
+            neg_candidates = neg_candidates[:, indices]
 
-        # Iterate through all possible target nodes (j)
-        for j in range(num_nodes):
-            # 1. Temporal Constraint: Only consider next time frame
-            if time_frames[j] != current_node_time + 1:
-                continue
-
-            # 2. Local Constraint: Check spatial proximity (Euclidean distance)
-            target_node_pos = pos_coords[j]
-            # Adjust distance calculation based on your 'pos' dimension
-            if pos_coords.ndim == 1: # If 'pos' is just centroid_y (1D)
-                distance = np.abs(current_node_pos - target_node_pos)
-            else: # If 'pos' is (y, x) or (x, y) etc. (2D or more)
-                distance = np.linalg.norm(current_node_pos - target_node_pos)
-
-            if distance > radius_threshold:
-                continue
-
-            # 3. Exclude existing positive edges
-            if (i, j) not in existing_edges:
-                potential_neg_samples.append((i, j))
-
-    # Convert to tensor
-    if not potential_neg_samples:
-        return torch.empty((2, 0), dtype=torch.long, device=device)
-
-    potential_neg_samples_tensor = torch.tensor(potential_neg_samples, dtype=torch.long).T.to(device)
-
-    # Sample a subset of potential negative samples based on ratio
-    num_positive_edges = data.edge_index.size(1)
-    desired_neg_samples = int(num_positive_edges * num_neg_samples_per_pos_edge)
-
-    if desired_neg_samples >= potential_neg_samples_tensor.size(1):
-        # If not enough potential negatives, take all of them
-        return potential_neg_samples_tensor
-    else:
-        # Randomly sample the desired number of negative edges
-        indices = torch.randperm(potential_neg_samples_tensor.size(1), device=device)[:desired_neg_samples]
-        return potential_neg_samples_tensor[:, indices]
+    return neg_candidates
 
 
-def train_link_prediction(model, train_loader, optimizer, criterion, device, neg_sample_ratio=3.0,
-                          radius_threshold=None):
+def train_one_epoch_cell_tracking_hnm(model, loader, optimizer, criterion, device, radius_threshold: float, num_hard_neg_per_positive=None):
     model.train()
     total_loss = 0
-    num_batches_processed = 0  # Track processed batches for accurate average loss
+    num_batches = 0
 
-    for data in train_loader:
+    for i, data in enumerate(loader):
         data = data.to(device)
         optimizer.zero_grad()
 
-        # Ensure data.edge_index is long
-        if data.edge_index.dtype != torch.long:
-            data.edge_index = data.edge_index.long()
-
-        # Handle cases where the batch has no positive edges (no ground truth for training)
         if data.edge_index.numel() == 0:
-            print(f"Skipping batch: No positive edges in the current batch for training.")
-            continue  # Skip to the next batch
+            print(f"Skipping training batch {i+1}: No positive edges for this timeframe.")
+            continue
 
-        # 1. Generate negative edges
-        neg_edge_index = generate_local_temporal_negative_samples(
+        if data.edge_index.dtype != torch.long: data.edge_index = data.edge_index.long()
+
+        # Compute node embeddings
+        z = model(data.x, data.edge_index) # Or model.encode(data.x) if your GNN is set up that way
+
+        # --- HNM Specific Steps ---
+        # 1. Generate ALL plausible negative candidates using your adapted function
+        candidate_neg_edge_index = get_all_plausible_negative_candidates(
             data,
-            num_neg_samples_per_pos_edge=neg_sample_ratio,  # How many neg samples per positive edge
-            radius_threshold=radius_threshold,  # Spatial threshold (e.g., 50.0 units)
+            radius_threshold=radius_threshold, # Pass your radius_threshold here
             device=device
         )
 
-        # Ensure neg_edge_index is long
-        if neg_edge_index is not None and neg_edge_index.dtype != torch.long:
-            neg_edge_index = neg_edge_index.long()
+        # Handle cases where no negative candidates are left after filtering (very rare if your data is structured)
+        if candidate_neg_edge_index.numel() == 0:
+            print(f"Warning (Batch {i+1}): No plausible negative candidates generated for this timeframe. Training with positive only.")
+            logits = model.decode(z, data.edge_index)
+            labels = torch.ones(logits.size(0), device=device)
+        else:
+            # 2. Compute logits for positive and ALL candidate negative samples
+            pos_logits = model.decode(z, data.edge_index)
+            candidate_neg_logits = model.decode(z, candidate_neg_edge_index)
 
-        # Fallback if no local negatives are found or if initial neg_edge_index is empty
-        if neg_edge_index.numel() == 0:
-            print("Warning: No local negative samples generated for a batch. Falling back to random sampling.")
-            # Ensure num_nodes is greater than 1 for negative_sampling to work
-            if data.num_nodes < 2 or data.edge_index.size(1) == 0:
-                print(
-                    f"Skipping batch: Not enough nodes ({data.num_nodes}) or no positive edges to sample random negatives.")
-                continue
+            # 3. Identify Hard Negatives (select top N highest logits from candidates)
+            sorted_neg_logits, _ = torch.sort(candidate_neg_logits, descending=True)
 
-            neg_edge_index = torch_geometric.utils.negative_sampling(
-                data.edge_index, num_nodes=data.num_nodes, num_neg_samples=data.edge_index.size(1)).to(device)
+            if num_hard_neg_per_positive is None:
+                # Default: take a fixed number of hardest negatives, up to the total available
+                num_hard_neg_to_select = min(5, sorted_neg_logits.numel()) # Example: Top 5 hardest negatives
+            else:
+                # Use the ratio: ensures at least one positive is matched with ratio_val hard negatives
+                num_hard_neg_to_select = min(int(num_hard_neg_per_positive * pos_logits.size(0)), sorted_neg_logits.numel())
 
-            if neg_edge_index.numel() == 0:  # Still empty after fallback? Skip.
-                print("Skipping batch: Random negative sampling also yielded no samples.")
-                continue
+            if num_hard_neg_to_select == 0:
+                print(f"Warning (Batch {i+1}): No hard negative samples selected based on criteria. Training with positive only.")
+                selected_hard_neg_logits = torch.empty(0, device=device)
+            else:
+                selected_hard_neg_logits = sorted_neg_logits[:num_hard_neg_to_select]
 
-            # Re-ensure the fallback also produces long tensors
-            if neg_edge_index.dtype != torch.long:
-                neg_edge_index = neg_edge_index.long()
+            # 4. Construct final batch logits and labels
+            logits = torch.cat([pos_logits, selected_hard_neg_logits])
+            labels = torch.cat([
+                torch.ones(pos_logits.size(0), device=device),
+                torch.zeros(selected_hard_neg_logits.size(0), device=device)
+            ])
 
-        # Now that we are sure both pos and neg edges exist, proceed
-        # 2. Get node embeddings from GNN encoder
-        z = model(data.x,
-                  data.edge_index)  # This might also fail if data.x is empty for some reason, but less likely for now
-
-        # 3. Decode edges (both positive and negative)
-        pos_logits = model.decode(z, data.edge_index)  # Logits for true edges
-        neg_logits = model.decode(z, neg_edge_index)  # Logits for sampled negative edges
-
-        # Ensure pos_logits and neg_logits are not empty before creating labels
-        if pos_logits.numel() == 0 and neg_logits.numel() == 0:
-            print(f"Skipping batch: Both positive and negative logits are empty after decoding.")
-            continue
-
-        # 4. Create labels: 1 for positive edges, 0 for negative edges
-        pos_labels = torch.ones(pos_logits.size(0), device=device)
-        neg_labels = torch.zeros(neg_logits.size(0), device=device)
-
-        # 5. Concatenate logits and labels
-        logits = torch.cat([pos_logits, neg_logits])
-        labels = torch.cat([pos_labels, neg_labels])
-
-        # Ensure combined logits/labels are not empty before calculating loss
+        # 5. Calculate loss and backpropagate
         if logits.numel() == 0:
-            print(f"Skipping batch: Combined logits tensor is empty. This batch has no valid edges to train on.")
+            print(f"Skipping batch {i+1}: Final logits tensor is empty after HNM. (This should be rare if pos_edge_index exists).")
             continue
 
-        # 6. Calculate loss
-        loss = criterion(logits, labels)
+        loss = criterion(logits.squeeze(), labels.float())
         loss.backward()
         optimizer.step()
 
         total_loss += loss.item()
-        num_batches_processed += 1  # Increment only for successfully processed batches
+        num_batches += 1
 
-    if num_batches_processed > 0:
-        avg_loss = total_loss / num_batches_processed
-    else:
-        avg_loss = 0.0  # Or raise an error if no batches were processed at all
-
+    avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
     return avg_loss
 
 
-def evaluate_link_prediction(model, loader, criterion, device, neg_sample_ratio=1.0, radius_threshold=None,
+def train_dynamic(model, loader, optimizer, neg_sample_ratio=1, device=None):
+    """
+    Final optimized version addressing class imbalance with both sampling and loss weighting.
+
+    Args:
+        model: The GNN model.
+        loader: The PyG DataLoader.
+        optimizer: The optimizer.
+        neg_sample_ratio: The ratio of negative to positive samples.
+        device: The device.
+
+    Returns:
+        float: The average loss for the epoch.
+    """
+    model.train()
+    total_loss = 0
+    num_batches_processed = 0
+
+    # The pos_weight is constant per batch since neg_sample_ratio is constant
+    pos_weight = torch.tensor(neg_sample_ratio, device=device)
+    criterion = BCEWithLogitsLoss(pos_weight=pos_weight)
+
+    for batch_data in loader:
+        optimizer.zero_grad()
+        batch_data = batch_data.to(device)
+
+        if batch_data.edge_index.numel() == 0 or batch_data.num_nodes == 0:
+            continue
+
+        z = model(batch_data.x, batch_data.edge_index)
+
+        pos_links = batch_data.edge_index
+        num_neg_samples = int(pos_links.size(1) * neg_sample_ratio)
+        neg_links = pyg_utils.negative_sampling(
+            pos_links,
+            num_nodes=batch_data.num_nodes,
+            num_neg_samples=num_neg_samples
+        ).to(device)
+
+        # Check for valid links after sampling
+        if pos_links.numel() == 0 or neg_links.numel() == 0:
+            continue
+
+        pos_logits = model.decode(z, pos_links)
+        neg_logits = model.decode(z, neg_links)
+
+        pos_labels = torch.ones(pos_logits.size(0), device=device)
+        neg_labels = torch.zeros(neg_logits.size(0), device=device)
+
+        logits = torch.cat([pos_logits, neg_logits])
+        labels = torch.cat([pos_labels, neg_labels])
+
+        # Loss calculation is now handled by the weighted criterion
+        loss = criterion(logits.squeeze(), labels)
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item()
+        num_batches_processed += 1
+
+    return total_loss / num_batches_processed if num_batches_processed > 0 else 0.0
+
+
+def evaluate_link_prediction(model, loader, criterion, device, neg_sample_ratio=1, radius_threshold=None,
                              node_lineage_map=None):
     model.eval()
     total_loss = 0
@@ -489,6 +560,10 @@ def evaluate_link_prediction(model, loader, criterion, device, neg_sample_ratio=
 
     with torch.no_grad():
         for data in loader:
+            for key, value in data.items():
+                if torch.is_tensor(value) and value.dtype == torch.float64:
+                    data[key] = value.to(torch.float32)
+
             data = data.to(device)
 
             if not hasattr(data, 'original_global_node_ids'):
@@ -507,8 +582,8 @@ def evaluate_link_prediction(model, loader, criterion, device, neg_sample_ratio=
 
             batch_original_global_node_ids = data.original_global_node_ids.cpu().numpy()
 
-            neg_edge_index = generate_local_temporal_negative_samples(
-                data,
+            neg_edge_index = get_all_plausible_negative_candidates(
+                data=data,  # Pass the entire Batch object
                 num_neg_samples_per_pos_edge=neg_sample_ratio,
                 radius_threshold=radius_threshold,
                 device=device
@@ -575,9 +650,10 @@ def evaluate_link_prediction(model, loader, criterion, device, neg_sample_ratio=
             source_global_ids = batch_original_global_node_ids[current_evaluated_edge_indices_local[0].cpu().numpy()]
             target_global_ids = batch_original_global_node_ids[current_evaluated_edge_indices_local[1].cpu().numpy()]
 
-            current_evaluated_edge_indices_global = torch.tensor(
-                [source_global_ids, target_global_ids], dtype=torch.long
-            )
+            # Concatenate the NumPy arrays first, then convert to a single tensor
+            source_target_np = np.stack([source_global_ids, target_global_ids])
+            current_evaluated_edge_indices_global = torch.from_numpy(source_target_np).long()
+
             all_evaluated_edge_indices_global.append(current_evaluated_edge_indices_global)
 
     if num_batches_processed_eval == 0:
@@ -625,6 +701,145 @@ def evaluate_link_prediction(model, loader, criterion, device, neg_sample_ratio=
             derived_lineage_labels_final = ['N/A'] * final_evaluated_edge_indices_global.size(1)
 
     print("evaluate_link_prediction: Function about to return results.")
+    return (avg_loss, accuracy, auc_score,
+            final_predicted_labels, final_probabilities, final_true_labels,
+            final_evaluated_edge_indices_global, derived_lineage_labels_final)
+
+
+def evaluate_dynamic(model, loader, criterion, device, neg_sample_ratio=1, node_lineage_map=None):
+    """
+    Performs a single epoch of dynamic evaluation and returns comprehensive results.
+
+    Args:
+        model: The GNN model with a forward (encoder) and decode method.
+        loader: The PyG DataLoader for validation/test graphs.
+        criterion: The loss function.
+        device: The device to run on ('cuda' or 'cpu').
+        neg_sample_ratio: The ratio of negative to positive samples to generate.
+        node_lineage_map: A dictionary mapping global node IDs to their ground truth lineage.
+
+    Returns:
+        tuple: (avg_loss, accuracy, auc_score, final_predicted_labels,
+                final_probabilities, final_true_labels,
+                final_evaluated_edge_indices_global, derived_lineage_labels_final)
+    """
+    model.eval()
+    total_loss = 0
+    all_preds_logits = []
+    all_labels_agg = []
+    all_predicted_labels_individual = []
+    all_probabilities_individual = []
+    all_true_labels_individual = []
+    all_evaluated_edge_indices_global = []
+    derived_lineage_labels_final = []
+    num_batches_processed_eval = 0
+
+    with torch.no_grad():
+        for data in loader:
+            for key, value in data.items():
+                if torch.is_tensor(value) and value.dtype == torch.float64:
+                    data[key] = value.to(torch.float32)
+
+            data = data.to(device)
+
+            if not hasattr(data, 'original_global_node_ids'):
+                raise AttributeError("The 'data' object (batch) does not have 'original_global_node_ids'.")
+
+            if data.edge_index.numel() == 0 or data.num_nodes == 0:
+                print(f"Skipping evaluation batch: No valid edges or nodes.")
+                continue
+
+            batch_original_global_node_ids = data.original_global_node_ids.cpu().numpy()
+
+            # --- OPTIMIZED NEGATIVE SAMPLING ---
+            pos_links = data.edge_index
+            num_neg_samples = int(pos_links.size(1) * neg_sample_ratio)
+            neg_links = pyg_utils.negative_sampling(
+                pos_links,
+                num_nodes=data.num_nodes,
+                num_neg_samples=num_neg_samples
+            ).to(device)
+
+            if pos_links.numel() == 0 or neg_links.numel() == 0:
+                print(f"Skipping evaluation batch: Insufficient positive or negative links after sampling.")
+                continue
+
+            # GNN Encoder and Decoder
+            z = model(data.x, data.edge_index)
+            pos_logits = model.decode(z, pos_links)
+            neg_logits = model.decode(z, neg_links)
+
+            # Create labels and concatenate logits
+            pos_labels = torch.ones(pos_logits.size(0), device=device)
+            neg_labels = torch.zeros(neg_logits.size(0), device=device)
+            logits = torch.cat([pos_logits, neg_logits])
+            labels = torch.cat([pos_labels, neg_labels])
+
+            if logits.numel() == 0:
+                print(f"Skipping evaluation batch: Combined logits tensor is empty.")
+                continue
+
+            loss = criterion(logits.squeeze(), labels)
+            total_loss += loss.item()
+            num_batches_processed_eval += 1
+
+            all_preds_logits.append(logits.cpu())
+            all_labels_agg.append(labels.cpu())
+            probabilities = torch.sigmoid(logits)
+            predicted_labels = (probabilities > 0.5).long()
+            all_predicted_labels_individual.append(predicted_labels.cpu())
+            all_probabilities_individual.append(probabilities.cpu())
+            all_true_labels_individual.append(labels.cpu())
+
+            # Map local indices back to global IDs
+            current_evaluated_edge_indices_local = torch.cat([pos_links, neg_links], dim=-1)
+            source_global_ids = batch_original_global_node_ids[current_evaluated_edge_indices_local[0].cpu().numpy()]
+            target_global_ids = batch_original_global_node_ids[current_evaluated_edge_indices_local[1].cpu().numpy()]
+            source_target_np = np.stack([source_global_ids, target_global_ids])
+            current_evaluated_edge_indices_global = torch.from_numpy(source_target_np).long()
+            all_evaluated_edge_indices_global.append(current_evaluated_edge_indices_global)
+
+    if num_batches_processed_eval == 0:
+        print("Warning: No batches were processed for evaluation. Returning default values.")
+        return 0.0, 0.0, 0.0, torch.empty(0), torch.empty(0), torch.empty(0), torch.empty((2, 0), dtype=torch.long), []
+
+    # Aggregate results from all batches
+    avg_loss = total_loss / num_batches_processed_eval
+    all_preds_logits_agg = torch.cat(all_preds_logits)
+    all_labels_np_agg = torch.cat(all_labels_agg).numpy()
+    all_preds_proba_agg = torch.sigmoid(all_preds_logits_agg).numpy()
+
+    accuracy = accuracy_score(all_labels_np_agg, (all_preds_proba_agg > 0.5).astype(int))
+    if len(np.unique(all_labels_np_agg)) < 2:
+        auc_score = 0.5
+        print("Warning: Only one class present in true labels for AUC calculation. Setting AUC to 0.5.")
+    else:
+        auc_score = roc_auc_score(all_labels_np_agg, all_preds_proba_agg)
+
+    final_predicted_labels = torch.cat(all_predicted_labels_individual, dim=0)
+    final_probabilities = torch.cat(all_probabilities_individual, dim=0)
+    final_true_labels = torch.cat(all_true_labels_individual, dim=0)
+    final_evaluated_edge_indices_global = torch.cat(all_evaluated_edge_indices_global, dim=1)
+
+    # Derive lineage labels if the map is provided
+    derived_lineage_labels_final = []
+    if node_lineage_map:
+        for i in range(final_evaluated_edge_indices_global.size(1)):
+            src_global_id = final_evaluated_edge_indices_global[0, i].item()
+            dst_global_id = final_evaluated_edge_indices_global[1, i].item()
+            true_label_for_this_edge = final_true_labels[i].item()
+            src_lineage = node_lineage_map.get(src_global_id, 'Unknown_Src_Node')
+            dst_lineage = node_lineage_map.get(dst_global_id, 'Unknown_Dst_Node')
+            if src_lineage.startswith('Unknown') or dst_lineage.startswith('Unknown'):
+                edge_lineage = 'Unknown_Edge_Lineage'
+            elif true_label_for_this_edge == 0:
+                edge_lineage = f'NEG_({src_lineage}_to_{dst_lineage})'
+            else:
+                edge_lineage = f'POS_({src_lineage}_to_{dst_lineage})'
+            derived_lineage_labels_final.append(edge_lineage)
+    else:
+        derived_lineage_labels_final = ['N/A'] * final_evaluated_edge_indices_global.size(1)
+
     return (avg_loss, accuracy, auc_score,
             final_predicted_labels, final_probabilities, final_true_labels,
             final_evaluated_edge_indices_global, derived_lineage_labels_final)
@@ -684,60 +899,30 @@ def predict_cell_linkages(model, loader, device):
     return final_predicted_labels, final_probabilities, final_predicted_edge_indices_global
 
 
-def identify_sub_lineage_roots(df):
-    # Ensure relevant columns are present
-    required_cols = ['experiment_name', 'FOV', 'trench_id', 'ground_truth_lineage', 'time_frame', 'node_id']
-    if not all(col in df.columns for col in required_cols):
-        raise ValueError(f"DataFrame must contain all required columns: {required_cols}")
-    df_temp_sorted = df.sort_values(by=['time_frame', 'node_id'])
-    first_appearances = df_temp_sorted.drop_duplicates(
-        subset=['experiment_name', 'FOV', 'trench_id', 'ground_truth_lineage'],
-        keep='first'
-    )
-
-    # Extract the necessary information for each root
-    # Convert to list of tuples as in the original function's output format
-    sub_lineage_roots = list(first_appearances[[
-        'experiment_name',
-        'FOV',
-        'trench_id',
-        'ground_truth_lineage',
-        'time_frame'
-    ]].itertuples(index=False, name=None))
-
-    return sub_lineage_roots
-
-def identify_exp_fov(df):
-    # Ensure relevant columns are present
-    required_cols = ['experiment_name', 'FOV', 'trench_id', 'time_frame', 'node_id']
-    if not all(col in df.columns for col in required_cols):
-        raise ValueError(f"DataFrame must contain all required columns: {required_cols}")
-    df_sorted = df.sort_values(by=['time_frame', 'node_id'], ascending=True)
-    unique_contexts = df_sorted.drop_duplicates(
-        subset=['experiment_name', 'FOV', 'trench_id'],
-        keep='first')
-
-    # Extract the necessary information for each fov
-    exp_fov_info = list(unique_contexts[[
-        'experiment_name',
-        'FOV',
-        'trench_id',
-        'time_frame']].itertuples(index=False, name=None))
-
-    return exp_fov_info
-
-
-class LineageDataset(Dataset):
-    def __init__(self, data_list):
+class LineageLinkPredictionGNN_dp(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, dropout_rate=0.5):
         super().__init__()
-        self.data_list = data_list
+        self.conv1 = GCNConv(in_channels, hidden_channels)
+        self.conv2 = GCNConv(hidden_channels, hidden_channels)
+        self.conv3 = GCNConv(hidden_channels, hidden_channels)
+        self.decode_layer = nn.Linear(2 * hidden_channels, 1)
+        self.dropout = nn.Dropout(p=dropout_rate) # Add a dropout layer
 
-    def len(self):
-        return len(self.data_list)
+    def forward(self, x, edge_index):
+        # GNN Encoder
+        x = self.conv1(x, edge_index).relu()
+        x = self.dropout(x)  # Apply dropout after activation
+        x = self.conv2(x, edge_index).relu()
+        x = self.dropout(x)
+        x = self.conv3(x, edge_index).relu()
+        x = self.dropout(x)
+        return x
 
-    def get(self, idx):
-        return self.data_list[idx]
-
+    def decode(self, z, edge_index):
+        # Decoder
+        h = torch.cat([z[edge_index[0]], z[edge_index[1]]], dim=-1)
+        h = self.decode_layer(h)
+        return h
 
 class LineageLinkPredictionGNN(nn.Module):
     def __init__(self, in_channels, hidden_channels):
@@ -779,5 +964,71 @@ class LineageLinkPredictionGNN(nn.Module):
         logits = self.decoder(edge_features)
         return logits.squeeze(-1)  # Squeeze to get a 1D tensor of logits
 
+class StandardScalerTransform(BaseTransform):
+    def __init__(self, scaler):
+        super().__init__()
+        self.scaler = scaler
+
+    def __call__(self, data):
+        if hasattr(data, 'x') and data.x is not None:
+            # Convert to numpy, transform, and explicitly cast to float32
+            x_np = data.x.cpu().numpy()
+            x_scaled_np = self.scaler.transform(x_np).astype(np.float32)
+
+            # Create the tensor with the correct data type and device
+            data.x = torch.from_numpy(x_scaled_np).to(data.x.device)
+        return data
 
 
+class CellTrackingDataset(InMemoryDataset):
+    def __init__(self, root, df_cells, node_feature_cols, device, transform=None, pre_transform=None):
+        self.df_cells = df_cells
+        self.node_feature_cols = node_feature_cols
+        self.device = device
+        super().__init__(root, transform, pre_transform)
+        self.data, self.slices = torch.load(self.processed_paths[0], weights_only=False)
+
+    @property
+    def raw_file_names(self):
+        return []
+
+    @property
+    def processed_file_names(self):
+        return ['cell_tracking_fovs.pt']  # Changed filename
+
+    def download(self):
+        pass
+
+    def process(self):
+        print("Starting data processing to create FOV graphs...")
+
+        all_fov_graphs = []
+
+        # Identify unique FOV/trench combinations
+        unique_fovs = self.df_cells[['experiment_name', 'FOV', 'trench_id']].drop_duplicates().to_records(index=False)
+
+        for exp, fov, trench in unique_fovs:
+            # Filter the DataFrame to get ALL cells within this FOV/trench
+            df_fov_trench = self.df_cells[
+                (self.df_cells['experiment_name'] == exp) &
+                (self.df_cells['FOV'] == fov) &
+                (self.df_cells['trench_id'] == trench)
+                ].copy()
+
+            if not df_fov_trench.empty:
+                # Call the new function
+                fov_graph = create_fov_graph(df_fov_trench, self.node_feature_cols, self.device)
+
+                if fov_graph is not None:
+                    all_fov_graphs.append(fov_graph)
+
+        print(f"Finished processing. Created {len(all_fov_graphs)} PyG Data objects (FOV graphs).")
+
+        if self.pre_filter is not None:
+            all_fov_graphs = [data for data in all_fov_graphs if self.pre_filter(data)]
+        if self.pre_transform is not None:
+            all_fov_graphs = [self.pre_transform(data) for data in all_fov_graphs]
+
+        print("Processing data... Creating new data file.")
+        torch.save(self.collate(all_fov_graphs), self.processed_paths[0])
+        print(f"Processed data saved to {self.processed_paths[0]}")
