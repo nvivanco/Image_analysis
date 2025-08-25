@@ -1,13 +1,18 @@
+import numpy as np
+
 import torch
 import torch.nn as nn
-from torch_geometric.nn import MessagePassing, GCNConv, global_mean_pool
-import torch_geometric.utils as pyg_utils
-from torch_geometric.data import Data, Dataset, Batch, InMemoryDataset
 import torch.nn.functional as F
-from sklearn.metrics import roc_auc_score, accuracy_score
-import numpy as np
-from torch.nn import BCEWithLogitsLoss
 
+from torch_geometric.data import Data, Batch, InMemoryDataset
+from torch_geometric.loader import DataLoader
+from torch_geometric.nn import MessagePassing
+from torch_geometric.nn.models import JumpingKnowledge
+import torch_geometric.transforms as T
+import torch_geometric.utils as pyg_utils
+
+from sklearn.metrics import roc_auc_score, accuracy_score
+from torch.nn import BCEWithLogitsLoss
 
 
 def train_dynamic(model, loader, optimizer, neg_sample_ratio=1, device=None):
@@ -40,9 +45,9 @@ def train_dynamic(model, loader, optimizer, neg_sample_ratio=1, device=None):
 
 		# Correctly get the single tensor returned by the model's forward pass.
 		# 'z' is now a tensor containing the final node embeddings.
-		z = model(batch_data.x, batch_data.edge_index, batch_data.edge_attr)
+		z, _ = model(batch_data.x, batch_data.edge_index, batch_data.edge_attr)
 
-		pos_links = batch_data.edge_index
+		pos_links = batch_data.edge_index.long()
 		# Get the original edge attributes for positive links.
 		# These were already projected within the model's forward pass.
 		pos_edge_attr_raw = batch_data.edge_attr
@@ -52,7 +57,7 @@ def train_dynamic(model, loader, optimizer, neg_sample_ratio=1, device=None):
 		num_neg_samples = int(pos_links.size(1) * neg_sample_ratio)
 		neg_links = pyg_utils.negative_sampling(
 			pos_links, num_nodes=batch_data.num_nodes, num_neg_samples=num_neg_samples
-		).to(device)
+		).to(device).long()
 
 		# Generate negative edge attributes for the new links.
 		# These need to be projected to the correct dimension before passing to the decoder.
@@ -121,10 +126,8 @@ def evaluate_dynamic(model, loader, criterion, device, neg_sample_ratio=1, node_
 
 			batch_original_global_node_ids = data.original_global_node_ids.cpu().numpy()
 
-			# --- OPTIMIZED NEGATIVE SAMPLING ---
-			pos_links = data.edge_index
+			pos_links = data.edge_index.long()
 
-			# --- Correctly generate and project edge attributes ---
 			# Project the positive edge attributes to match the hidden_channels dimension
 			pos_edge_attr_projected = model.initial_edge_proj(data.edge_attr)
 
@@ -133,7 +136,7 @@ def evaluate_dynamic(model, loader, criterion, device, neg_sample_ratio=1, node_
 				pos_links,
 				num_nodes=data.num_nodes,
 				num_neg_samples=num_neg_samples
-			).to(device)
+			).to(device).long()
 
 			if pos_links.numel() == 0 or neg_links.numel() == 0:
 				print(f"Skipping evaluation batch: Insufficient positive or negative links after sampling.")
@@ -147,7 +150,7 @@ def evaluate_dynamic(model, loader, criterion, device, neg_sample_ratio=1, node_
 
 			# GNN Encoder and Decoder
 			# The model's forward pass now returns only the node embeddings (z).
-			z = model(data.x, data.edge_index, data.edge_attr)
+			z, _ = model(data.x, data.edge_index, data.edge_attr)
 
 			# Pass the projected edge attributes to the decode method.
 			pos_logits = model.decode(z, pos_links, pos_edge_attr_projected)
@@ -301,39 +304,16 @@ def create_fov_graph(df_fov, node_feature_cols, device='cpu'):
 				source_nodes_local_idx.append(global_id_to_local_idx[current_global_node_id])
 				target_nodes_local_idx.append(global_id_to_local_idx[next_global_node_id])
 
-	# --- New section for calculating edge attributes ---
 	if not source_nodes_local_idx:
 		edge_index = torch.empty((2, 0), dtype=torch.long).to(device)
-		edge_attr = torch.empty((0, len(node_feature_cols) * 2), dtype=torch.float).to(
-			device)  # Placeholder for zero edges
 	else:
-		# Get unique edges and create edge_index
 		unique_edges = list(set(zip(source_nodes_local_idx, target_nodes_local_idx)))
 		source_nodes_unique, target_nodes_unique = zip(*unique_edges)
 		edge_index = torch.tensor([list(source_nodes_unique), list(target_nodes_unique)], dtype=torch.long).to(device)
 
-		# Calculate edge attributes for the unique edges
-		edge_attr_list = []
-		for i in range(edge_index.size(1)):
-			src_idx = edge_index[0, i].item()
-			tgt_idx = edge_index[1, i].item()
-
-			v_i = x[src_idx]
-			v_j = x[tgt_idx]
-
-			# Use a simple difference-sum block for edge features
-			abs_diff = torch.abs(v_i - v_j)
-			cosine_similarity = F.cosine_similarity(v_i.unsqueeze(0), v_j.unsqueeze(0)).squeeze(0)
-
-			# This now matches your model's expected input dimension (len(node_feature_cols) + 1)
-			edge_attr_list.append(torch.cat([abs_diff, cosine_similarity.unsqueeze(0)], dim=-1))
-
-		edge_attr = torch.stack(edge_attr_list, dim=0).to(device)
-
-	# Create the single Data object, now including edge_attr
+	# Create the single Data object without edge_attr
 	data = Data(x=x,
 				edge_index=edge_index,
-				edge_attr=edge_attr,  # Added edge_attr
 				y=y,
 				pos=pos,
 				num_nodes=len(df_fov),
@@ -346,7 +326,7 @@ def create_fov_graph(df_fov, node_feature_cols, device='cpu'):
 	return data
 
 
-# --- Helper MLP for f_PDN_edge (Attention Weights) ---
+# Helper MLP for f_PDN_edge
 class PDNEdgeMLP(nn.Module):
 	def __init__(self, edge_feature_dim, out_dim=1):
 		super().__init__()
@@ -361,7 +341,7 @@ class PDNEdgeMLP(nn.Module):
 		return self.mlp(z)
 
 
-# --- Helper MLP for f_PDN_node (Node Feature Transformation) ---
+# Helper MLP for f_PDN_node
 class PDNNodeMLP(nn.Module):
 	def __init__(self, node_feature_dim, out_dim):
 		super().__init__()
@@ -376,7 +356,7 @@ class PDNNodeMLP(nn.Module):
 		return self.mlp(x)
 
 
-# --- D-S Block (Distance & Similarity) ---
+# D-S Block determine similarity between nodes
 def DS_block(v_i, v_j):
 	"""
 	Calculates Distance & Similarity vector for two batches of node feature vectors.
@@ -400,7 +380,7 @@ def DS_block(v_i, v_j):
 	return torch.cat([abs_diff, cosine_similarity], dim=-1)
 
 
-# --- The EP-MPNN Block ---
+# EP-MPNN Block incorporates neighborhood info
 class EP_MPNN_Block(MessagePassing):
 	def __init__(self, node_channels, edge_channels):
 		super().__init__(aggr='add',
@@ -435,24 +415,8 @@ class EP_MPNN_Block(MessagePassing):
 		# edge_index: graph connectivity
 		# edge_attr: edge features Z^(l-1)
 
-		# 1. Edge Feature Update (first for this block, as per paper's description "In the l-th block vi = x(l)i and vj = x(l)j")
-		# However, the paper implies x(l) is used. Let's assume for simplicity first block
-		# uses x(l-1) and subsequent blocks use x(l).
-		# To align with: "In the l-th block vi = x(l)i and vj = x(l)j." and "the features of an edge ej,i are updated based on the features of νi and νj"
-		# This means edge update uses nodes *after* they are potentially updated by previous block.
-		# For l=0 (initial), x(0) are raw features. For l>0, x(l) comes from PDN-Conv.
-		# For simplicity, let's make it work sequentially: update nodes, THEN update edges using new nodes.
-		# Or, as paper implies "alternately updated", meaning within the block loop:
-		# Step A: Compute updated nodes x^(l) from x^(l-1) and z^(l-1)
-		# Step B: Compute updated edges z^(l) from x^(l) and z^(l-1)
-		# Let's follow this:
-
-		# Cache inputs for edge update after node update
 		x_prev = x
 		edge_attr_prev = edge_attr
-
-		# 2. Node Feature Update (PDN-Conv: Eq. 2)
-		# Message passing step
 
 		x_updated = self.propagate(edge_index, x=x, edge_attr=edge_attr, size=(x.size(0), x.size(0)))
 
@@ -460,7 +424,6 @@ class EP_MPNN_Block(MessagePassing):
 		x = self.bn_node(x_prev + x_updated)  # Residual (assuming input and output dims are same)
 		x = F.relu(x)  # x is now X^(l)
 
-		# 3. Edge Feature Update (Edge Encoder: based on x^(l) and z^(l-1))
 		# Get source and target node embeddings for edges
 		row, col = edge_index
 		src_node_features = x[row]  # x^(l) for source nodes
@@ -506,17 +469,12 @@ class EP_MPNN_Block(MessagePassing):
 		# inputs: [num_messages, hidden_channels] (omega_ji * tilde_x_j for each edge)
 		# index: target node index for each message
 		# dim_size: total number of nodes
-		# Summation aggregation (as per Eq. 2)
 		out = super().aggregate(inputs, index, dim_size=dim_size)
 		return out
 
 	def update(self, aggr_out):
-		# This is where the output of aggregation (sum_j omega_ji * tilde_x_j)
-		# is combined with the current node feature.
-		# But per Eq. 2, the residual is handled in the forward pass.
-		# So we just return the aggregated messages here.
-		return aggr_out  # This will be the x_updated in the forward pass
 
+		return aggr_out  # This will be the x_updated in the forward pass
 
 
 class LineageLinkPredictionGNN(nn.Module):
@@ -524,6 +482,8 @@ class LineageLinkPredictionGNN(nn.Module):
 		super().__init__()
 		self.num_blocks = num_blocks
 		self.hidden_channels = hidden_channels
+
+		self.jk = JumpingKnowledge('cat', hidden_channels, num_blocks)
 
 		# Initial Linear layer to project input features to hidden_channels
 		self.initial_node_proj = nn.Linear(in_channels, hidden_channels)
@@ -534,88 +494,139 @@ class LineageLinkPredictionGNN(nn.Module):
 		# Stack L EP-MPNN blocks
 		self.ep_mpnn_blocks = nn.ModuleList()
 		for _ in range(num_blocks):
-			# Assumes EP_MPNN_Block is defined elsewhere
 			self.ep_mpnn_blocks.append(EP_MPNN_Block(hidden_channels, hidden_channels))
 
-		# hidden_channels (src node) + hidden_channels (tgt node) + hidden_channels (edge)
+		# The output dimension of JK is num_blocks * hidden_channels for 'cat' mode.
+		# The decoder needs to match this new dimension.
+		# New input dimension for decoder:
+		# (num_blocks * hidden_channels) + (num_blocks * hidden_channels) + hidden_channels
+		# For a 2-layer GNN, this is (2*128) + (2*128) + 128 = 256 + 256 + 128 = 640
+		decoder_in_channels = 2 * (num_blocks * hidden_channels) + hidden_channels
+
 		self.decoder = nn.Sequential(
-			nn.Linear(3 * hidden_channels, 64),
+			nn.Linear(decoder_in_channels, 64),
 			nn.ReLU(),
 			nn.Linear(64, 1)  # Output a single logit for binary classification
 		)
 
-	def forward(self, x, edge_index, edge_attr):
-		# Initial projection of node features
-		x = F.relu(self.initial_node_proj(x))
 
+	def forward(self, x, edge_index, edge_attr):
+		# Initial projection of node and edge features
+		x = F.relu(self.initial_node_proj(x))
 		edge_attr = F.relu(self.initial_edge_proj(edge_attr))
+
+		# List to store node embeddings for Jumping Knowledge
+		xs = []
 
 		# Pass through L EP-MPNN blocks
 		for block in self.ep_mpnn_blocks:
 			x, edge_attr = block(x, edge_index, edge_attr)
+			xs.append(x)  # Append the output of each block
 
-		return x
+		# Apply Jumping Knowledge to get the final, aggregated node embeddings
+		z = self.jk(xs)
+
+		return z, edge_attr
+
 
 	def decode(self, z, edge_index, edge_attr):
-		src_embed = z[edge_index[0]]
-		tgt_embed = z[edge_index[1]]
+
+		src_embed = z[edge_index[0, :]]
+		tgt_embed = z[edge_index[1, :]]
 
 		edge_features = torch.cat([src_embed, tgt_embed, edge_attr], dim=-1)
 
-		logits = self.decoder(edge_features).squeeze(-1)  # Use the correct decoder
+		logits = self.decoder(edge_features).squeeze(-1)
 
 		return logits
 
 
 class CellTrackingDataset(InMemoryDataset):
-    def __init__(self, root, df_cells, node_feature_cols, device, transform=None, pre_transform=None):
-        self.df_cells = df_cells
-        self.node_feature_cols = node_feature_cols
-        self.device = device
-        super().__init__(root, transform, pre_transform)
-        self.data, self.slices = torch.load(self.processed_paths[0], weights_only=False)
+	def __init__(self, root, df_cells, node_feature_cols, device, transform=None, pre_transform=None,
+				 force_reload=False):
+		self.df_cells = df_cells
+		self.node_feature_cols = node_feature_cols
+		self.device = device
 
-    @property
-    def raw_file_names(self):
-        return []
+		# This will automatically call self.process() if the processed file doesn't exist.
+		super().__init__(root, transform, pre_transform, force_reload=force_reload)
 
-    @property
-    def processed_file_names(self):
-        return ['cell_tracking_fovs.pt']  # Changed filename
+		data_object = torch.load(self.processed_paths[0], weights_only=False)
+		self.data, self.slices = self.collate([data_object])
 
-    def download(self):
-        pass
+	@property
+	def raw_file_names(self):
+		# We don't have raw files to download in this manual pipeline.
+		return []
 
-    def process(self):
-        print("Starting data processing to create FOV graphs...")
+	@property
+	def processed_file_names(self):
+		# The name of the processed file to be created.
+		return ['cell_tracking_fovs.pt']
 
-        all_fov_graphs = []
+	def download(self):
+		# This method is not needed as we are providing the data via a DataFrame.
+		pass
 
-        # Identify unique FOV/trench combinations
-        unique_fovs = self.df_cells[['experiment_name', 'FOV', 'trench_id']].drop_duplicates().to_records(index=False)
+	def process(self):
+		print(f"Starting data processing for {self.root}...")
 
-        for exp, fov, trench in unique_fovs:
-            # Filter the DataFrame to get ALL cells within this FOV/trench
-            df_fov_trench = self.df_cells[
-                (self.df_cells['experiment_name'] == exp) &
-                (self.df_cells['FOV'] == fov) &
-                (self.df_cells['trench_id'] == trench)
-                ].copy()
+		all_fov_graphs = []
+		unique_fovs = self.df_cells[['experiment_name', 'FOV', 'trench_id']].drop_duplicates().to_records(index=False)
 
-            if not df_fov_trench.empty:
-                # Call the new function
-                fov_graph = create_fov_graph(df_fov_trench, self.node_feature_cols, self.device)
+		for exp, fov, trench in unique_fovs:
+			df_fov_trench = self.df_cells[
+				(self.df_cells['experiment_name'] == exp) &
+				(self.df_cells['FOV'] == fov) &
+				(self.df_cells['trench_id'] == trench)
+				].copy()
 
-                if fov_graph is not None:
-                    all_fov_graphs.append(fov_graph)
+			if not df_fov_trench.empty:
+				# Use your existing create_fov_graph function
+				fov_graph = create_fov_graph(df_fov_trench, self.node_feature_cols, self.device)
+				if fov_graph is not None:
+					all_fov_graphs.append(fov_graph)
 
-        print(f"Finished processing. Created {len(all_fov_graphs)} PyG Data objects (FOV graphs).")
+		print(f"Finished processing. Created {len(all_fov_graphs)} PyG Data objects.")
 
-        if self.pre_filter is not None:
-            all_fov_graphs = [data for data in all_fov_graphs if self.pre_filter(data)]
-        if self.pre_transform is not None:
-            all_fov_graphs = [self.pre_transform(data) for data in all_fov_graphs]
+		# Apply pre_transform (StandardScalerTransform)
+		if self.pre_transform is not None:
+			all_fov_graphs = [self.pre_transform(data) for data in all_fov_graphs]
 
-        print("Processing data... Creating new data file.")
-        torch.save(self.collate(all_fov_graphs), self.processed_paths[0])
-        print(f"Processed data saved to {self.processed_paths[0]}")
+		# Collate all graphs into a single object and save it.
+		if len(all_fov_graphs) > 0:
+			full_dataset_loader = DataLoader(all_fov_graphs, batch_size=len(all_fov_graphs))
+			batched_data = next(iter(full_dataset_loader))
+			torch.save(batched_data, self.processed_paths[0])
+			print(f"Processed data saved to {self.processed_paths[0]}")
+		else:
+			# Handle case with no graphs
+			torch.save(Data(), self.processed_paths[0])
+			print(f"No graphs to process. Saved an empty Data object to {self.processed_paths[0]}")
+
+
+class StandardScalerTransform(T.BaseTransform):
+    def __init__(self, scaler):
+        self.scaler = scaler
+
+    def __call__(self, data: Data) -> Data:
+        # Step 1: Scale node features (x)
+        data.x = torch.from_numpy(self.scaler.transform(data.x.cpu().numpy())).to(data.x.device).to(torch.float32)
+
+        # Step 2: Compute edge attributes using the now-scaled node features (x)
+        if data.edge_index.numel() > 0:
+            src_nodes_features = data.x[data.edge_index[0]]
+            tgt_nodes_features = data.x[data.edge_index[1]]
+
+            # Use your DS_block to compute the edge attributes
+            def DS_block(v_i, v_j):
+                abs_diff = torch.abs(v_i - v_j)
+                cosine_similarity = F.cosine_similarity(v_i, v_j, dim=-1).unsqueeze(-1)
+                return torch.cat([abs_diff, cosine_similarity], dim=-1)
+
+            data.edge_attr = DS_block(src_nodes_features, tgt_nodes_features)
+        else:
+            # Handle empty graphs
+            data.edge_attr = torch.empty((0, data.x.size(1) + 1), dtype=torch.float32, device=data.x.device)
+
+        return data
