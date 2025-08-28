@@ -1,18 +1,22 @@
+import numpy as np
+
 import torch
 import torch.nn as nn
 import torch_geometric
 import torch_geometric.utils as pyg_utils
+
 from torch_geometric.transforms import BaseTransform
 from torch_geometric.data import Data, Dataset, Batch, InMemoryDataset
 from torch_geometric.nn import GCNConv
 import torch.nn.functional as F
+
 from sklearn.metrics import roc_auc_score, accuracy_score
 from collections import deque
-import numpy as np
+
 from torch.nn import BCEWithLogitsLoss
 
 def find_lineage_branches(graph):
-    print("--- Function find_lineage_branches_optimized_v3 started ---")
+    print("--- Function find_lineage_branches started ---")
     all_lineage_segments = []
 
     print("Step 1: Identifying root nodes...")
@@ -92,7 +96,7 @@ def find_lineage_branches(graph):
 
     print(f"Step 3 Complete: Main traversal loop finished after {iteration_count} iterations.")
     print(f"Total lineage segments collected: {len(all_lineage_segments)}")
-    print("--- Function find_lineage_branches_optimized_v3 finished ---")
+    print("--- Function find_lineage_branches finished ---")
     return all_lineage_segments
 
 
