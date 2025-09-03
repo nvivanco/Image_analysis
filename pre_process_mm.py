@@ -395,7 +395,6 @@ def midpoint_distance(line, center):
     distance = np.sqrt((midpoint_x - center[0])**2 + (midpoint_y - center[1])**2)
     return distance
 
-
 def crop_around_central_flow(h_lines, w, h, growth_channel_length=400, threshold=700):
     """
     Crops an image around the central flow channel based on detected horizontal lines.
@@ -411,13 +410,7 @@ def crop_around_central_flow(h_lines, w, h, growth_channel_length=400, threshold
     Returns:
         A tuple containing the start and end indices for cropping along the vertical axis
         (y-axis) if a suitable line is found, otherwise None.
-    """
-
-    center_x, center_y = w // 2, h // 2
-    closest_line = None
-    min_difference = float('inf')
-
-    if h_lines:
+            # if h_lines:
         y_coordinates = [line[0][1] for line in h_lines]
         median_y = np.median(y_coordinates)
 
@@ -428,17 +421,32 @@ def crop_around_central_flow(h_lines, w, h, growth_channel_length=400, threshold
             if difference < min_difference:
                 min_difference = difference
                 closest_line = line
+    """
+    center_x, center_y = w // 2, h // 2
+    closest_line = None
+    min_difference = float('inf')
+    max_length = -1
+
+    if h_lines:
+        for line in h_lines:
+            # A line is represented as [[x1, y1, x2, y2]]
+            x1, y1, x2, y2 = line[0]
+
+            # Calculate the length of the line
+            length = abs(x2 - x1)
+
+            if length > max_length:
+                max_length = length
+                closest_line = line
 
         # Filter lines based on distance from the center and the threshold
-        # We'll consider the 'closest_line' found earlier as the primary candidate
-        # and then apply the threshold.
         if closest_line is not None:
             y_of_closest_line = closest_line[0][1]
             if abs(y_of_closest_line - center_y) <= threshold:
                 # Determine crop boundaries
                 crop_start = max(y_of_closest_line, 0)
-                crop_end = min(y_of_closest_line + growth_channel_length, h) # Ensure crop_end doesn't exceed image height
-
+                # Ensure crop_end doesn't exceed image height
+                crop_end = min(y_of_closest_line + growth_channel_length, h)
                 return crop_start, crop_end
             else:
                 print(f"The closest line (y={y_of_closest_line}) is outside the {threshold} pixel threshold from the center (y={center_y}).")
@@ -449,6 +457,7 @@ def crop_around_central_flow(h_lines, w, h, growth_channel_length=400, threshold
     else:
         print("No horizontal lines were detected in the image.")
         return None
+
 
 def rotate_stack(path_to_stack, c=0, growth_channel_length=400, closed_ends = 'down'):
 	"""Rotates and crops a stack of cyx or tcyx format files.
@@ -497,7 +506,7 @@ def rotate_stack(path_to_stack, c=0, growth_channel_length=400, closed_ends = 'd
 		# find spot
 
 		# Crop around the central flow
-		crop_start, crop_end = crop_around_central_flow(rot_horizontal_lines, w, h, growth_channel_length, 1600)
+		crop_start, crop_end = crop_around_central_flow(rot_horizontal_lines, w, h, growth_channel_length, 500)
 
 		# Rotate and crop the entire stack
 		rotated_stack = apply_image_rotation(stacked_img, rotation_angle, closed_ends)

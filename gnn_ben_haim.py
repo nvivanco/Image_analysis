@@ -12,8 +12,6 @@ from torch_geometric.nn.models import JumpingKnowledge
 import torch_geometric.transforms as T
 
 from sklearn.metrics import roc_auc_score, accuracy_score
-from scipy.spatial import KDTree
-from scipy.optimize import linear_sum_assignment
 from torch.nn import BCEWithLogitsLoss
 
 def train_dynamic(model, loader, optimizer, device=None):

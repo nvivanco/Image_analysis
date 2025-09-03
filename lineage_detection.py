@@ -45,7 +45,6 @@ def consolidate_lineages_to_node_df(df_consolidated_lineages, df_for_training):
 	df_daughters['is_daughter'] = True
 
 	# Step 3: Combine parent and daughter data.
-	# We will use the 'outer' merge to capture all unique nodes.
 	df_combined = pd.concat([df_parents, df_daughters], ignore_index=True)
 
 	# Use a groupby to handle cases where a node is both a parent and a daughter
@@ -62,7 +61,7 @@ def consolidate_lineages_to_node_df(df_consolidated_lineages, df_for_training):
 	final_df = df_for_training.merge(
 		df_lineage_info[['node_id', 'predicted_lineage']],
 		on='node_id',
-		how='left'
+		how='right'
 	)
 
 	# Handle nodes that were not part of any predicted lineage

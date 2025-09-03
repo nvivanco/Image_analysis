@@ -1,9 +1,13 @@
+import os
+
 import tifffile
 import numpy as np
 import pandas as pd
+
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from skimage.draw import polygon
+from skimage.measure import find_contours
 
 # Helper functions for image loading and setup
 
@@ -44,6 +48,116 @@ def mask_from_region(region, image):
     rr, cc = polygon(np.array(region.coords)[:, 0], np.array(region.coords)[:, 1], image.shape)
     cell_mask[rr, cc] = 1
     return cell_mask
+
+def plot_kymograph_cells_id(phase_kymograph, fluor_kymograph, full_region_df, folder, fov_id, peak_id, track_id_col='track_id'):
+    fig, ax = plt.subplots(1,1, figsize=(40, 10))
+
+    # Get kymograph shape once for both calls
+    kymograph_shape = phase_kymograph.shape
+
+    ax.imshow(phase_kymograph, cmap = 'grey')
+    _plot_cell_masks(ax, full_region_df, kymograph_shape, y_coord_col = 'centroid_y', x_coord_col = 'centroid_x', lineage_col = track_id_col)
+    ax.set_yticks([])
+    ax.set_xticks([])
+    ax.set_title(f'Phase Kymograph - {folder} FOV: {fov_id}, trench: {peak_id}')
+
+    plt.xlabel("Time frames")
+    plt.tight_layout()
+
+    plt.savefig(f'{folder}_FOV_{fov_id}_trench_{peak_id}_kymograph.png', dpi=300, bbox_inches='tight')
+    plt.close(fig)
+
+
+def _plot_cell_masks(ax, full_region_df, kymograph_shape, y_coord_col='centroid-0', x_coord_col='centroid-1',
+                     lineage_col=None):
+    default_cell_contour_color = '#AA5486'
+    default_centroid_color = '#FC8F54'
+
+    # Prepare data for LineCollection for contours
+    all_contours_segments = []
+    all_contour_colors = []
+
+    # Prepare data for centroids
+    centroid_x_coords = []
+    centroid_y_coords = []
+    centroid_colors = []
+
+    if lineage_col:
+        unique_track_ids = full_region_df[lineage_col].dropna().unique()
+        colors_cmap = plt.get_cmap('tab20', len(unique_track_ids))
+        track_colors = {track_id: colors_cmap(i) for i, track_id in enumerate(unique_track_ids)}
+
+    for index, region_props in full_region_df.iterrows():
+        # 'coords' are assumed to be (row, col) pixels within the mask
+        cell_pixel_coords = np.array(region_props['coords'])  # e.g., [[r1,c1], [r2,c2], ...]
+
+        # Calculate bounding box for the current cell's mask
+        min_row, min_col = np.min(cell_pixel_coords, axis=0)
+        max_row, max_col = np.max(cell_pixel_coords, axis=0)
+
+        # Create a small temporary mask for the current cell
+        # Add a small buffer to ensure contours are fully captured if they go to edge
+        buffer = 1
+        bbox_min_row = max(0, min_row - buffer)
+        bbox_min_col = max(0, min_col - buffer)
+        bbox_max_row = min(kymograph_shape[0], max_row + buffer)
+        bbox_max_col = min(kymograph_shape[1], max_col + buffer)
+
+        temp_mask_shape = (bbox_max_row - bbox_min_row + 1, bbox_max_col - bbox_min_col + 1)
+        temp_mask = np.zeros(temp_mask_shape, dtype=np.uint8)
+
+        # Map cell_pixel_coords to relative coordinates within temp_mask
+        relative_rows = cell_pixel_coords[:, 0] - bbox_min_row
+        relative_cols = cell_pixel_coords[:, 1] - bbox_min_col
+
+        # Populate the temporary mask
+        temp_mask[relative_rows, relative_cols] = 1
+
+        # Find contours on this small temporary mask
+        # level=0.5 means it finds contours at the boundary between 0 and 1
+        # fully_connected='high' means it considers 8-connectivity for background, 4-connectivity for foreground
+        contours = find_contours(temp_mask, level=0.5, fully_connected='high')
+
+        if not contours:
+            continue  # Skip if no contour found (e.g., single pixel or degenerate mask)
+
+        # `find_contours` returns (row, col) coordinates for the contour.
+        # We need to convert them back to global kymograph coordinates.
+        # And convert to (x, y) for plotting (col, row)
+        global_contours = []
+        for contour in contours:
+            # Shift back to global coordinates and swap for (x, y) plotting
+            global_contour_x = contour[:, 1] + bbox_min_col
+            global_contour_y = contour[:, 0] + bbox_min_row
+            global_contours.append(np.vstack([global_contour_x, global_contour_y]).T)
+
+        y_coord = region_props[y_coord_col]
+        x_coord = region_props[x_coord_col]
+
+        # Determine color for the current cell
+        if lineage_col and region_props[lineage_col] in track_colors:
+            current_color = track_colors[region_props[lineage_col]]
+        else:
+            current_color = default_cell_contour_color
+
+        # Add all contours for this cell to the main list, with the determined color
+        for contour_segment in global_contours:
+            all_contours_segments.append(contour_segment)
+            all_contour_colors.append(current_color)
+
+        # Add centroid data
+        centroid_x_coords.append(x_coord)
+        centroid_y_coords.append(y_coord)
+        centroid_colors.append(current_color if lineage_col else default_centroid_color)
+
+    # Plot all cell contours at once using LineCollection
+    if all_contours_segments:  # Only plot if there are segments to draw
+        line_collection = LineCollection(all_contours_segments, colors=all_contour_colors, linewidths=0.5)
+        ax.add_collection(line_collection)
+
+    # Plot all centroids at once using scatter
+    if centroid_x_coords:  # Only plot if there are centroids
+        ax.scatter(centroid_x_coords, centroid_y_coords, color=centroid_colors, s=5, zorder=2)
 
 # Helper functions for plotting
 
@@ -153,7 +267,7 @@ def display_stack(path_to_original_stack, start=0, end=20):
     _show_and_close_plot(fig)
 
 
-def _create_kymograph(phase_stack, start, end, fov_id, peak_id, output_dir):
+def create_kymograph(phase_stack, start, end, fov_id, peak_id, output_dir):
     """Creates and saves a kymograph."""
     kymographs_gray = []
     for i in range(start, end):
@@ -167,3 +281,24 @@ def _create_kymograph(phase_stack, start, end, fov_id, peak_id, output_dir):
     lin_filename = f'{fov_id}_{peak_id}.tif'
     lin_filepath = os.path.join(output_dir, lin_filename)  # Use output_dir
     tifffile.imwrite(lin_filepath, combined_kymograph)
+    return combined_kymograph
+
+# kymograph processing
+def add_time_frame_df(full_region_df, labeled_stack_px_width, mask_kymograph_px_width, x_centroid_col='centroid-1'):
+    time_frame_pixel_dict = _make_time_frame_pixel_dict(labeled_stack_px_width, mask_kymograph_px_width)
+    full_region_df['time_frame'] = full_region_df['centroid-1'].apply(_map_pixel_to_index,
+                                                                      range_dict=time_frame_pixel_dict)
+
+def _make_time_frame_pixel_dict(labeled_stack_px_width, mask_kymograph_px_width):
+    enumerated_x_increments_dict = {index: value for index, value in enumerate(
+        list(range(labeled_stack_px_width, mask_kymograph_px_width + 1, labeled_stack_px_width)))}
+    time_frame_pixel_dict = {}
+    for time_frame, x_limit in enumerated_x_increments_dict.items():
+        time_frame_pixel_dict[time_frame] = (x_limit - labeled_stack_px_width, x_limit - 1)
+    return time_frame_pixel_dict
+
+def _map_pixel_to_index(pixel, range_dict):
+    for index, (min_val, max_val) in range_dict.items():
+        if min_val <= pixel <= max_val:
+            return index
+    return None
