@@ -168,25 +168,33 @@ for folder, fov_dict in seg_FOV_dict.items():
 
 # track cell lineages, must have trained GNN model
 
-# create a dictionary with all the directories of segmented cells, specifying gene per directory, example dictionary:
+# create a dictionary with all the directories of segmented cells, specifying gene per directory, and fov corresponding to the given gene, example dictionary:
 
-strain_exp_dict = {'chpS': ['DUMM_giTG62_Glucose_012925'],
-                  'baeS':['DUMM_giTG66_Glucose_012325'],
-                  'lacZ':['DUMM_giTG059_noKan_Glucose_031125'],
-                  'gfcE': ['DUMM_giTG064_Glucose_022625'],
-                  'gldA': ['DUMM_giTG69_Glucose_013025'],
-                  'alkA': ['DUMM_giTG068_063_061725_v2','DUMM_giTG63_giTG67_Glucose_121724_1_v2'],
-                  'mazF': ['DUMM_giTG059_060_061125'], # constitutive
-                  'hupA':['DUMM_giTG068_052925', 'DUMM_giTG068_063_061725'] # constitutive
+strain_exp_dict = {# need araB gitg61/CL08 lineage tracing CL008_giTG068_072925 pos 0-10 is CL08 # don't see fluor signal
+                  # need murQ gitg67 lineage tracing potenitally DUMM_giTG068_067_061825 or DUMM_giTG63_giTG67_Glucose_121724_1 pos 6-9
+
+                  'chpS':{'DUMM_giTG62_Glucose_012925': ['005']},
+                  'baeS':{'DUMM_giTG66_Glucose_012325': ['003']},
+                  'lacZ':{'DUMM_giTG059_noKan_Glucose_031125': ['004'],
+                         'DUMM_giTG059_060_061125': ['008']},
+                  'gfcE': {'DUMM_giTG064_Glucose_022625': ['001', '015']},
+                  'gldA': {'DUMM_giTG69_Glucose_013025': ['007']},
+                  'alkA': {'DUMM_giTG068_063_061725_v2': ['000'],
+                           'DUMM_giTG63_giTG67_Glucose_121724_1_v2': ['006']},
+                  'mazF': {'DUMM_giTG059_060_061125': ['015']}, # constitutive
+                  'hupA':{'DUMM_giTG068_052925': ['005'],
+                          'DUMM_giTG068_063_061725': ['012']} # constitutive
                   }
 
 df_all = pd.DataFrame()
-for gene, exps in strain_exp_dict.items():
-    for exp_view in exps:
+for gene, exps_fov in strain_exp_dict.items():
+    for exp_view, fovs in exps_fov.items():
         print(exp_view)
         all_cells_filename = f'/Users/noravivancogonzalez/Documents/DuMM_image_analysis/all_cell_data_{exp_view}.pkl'
         all_cells_pd = pd.read_pickle(all_cells_filename)
-        all_cells_pd['gene'] = gene
+        all_cells_pd['gene'] = None
+        all_cells_pd.loc[all_cells_pd['FOV'].isin(fovs), 'gene'] = gene
+
         if df_all.empty:
             df_all = all_cells_pd
         else:
