@@ -248,3 +248,6 @@ widgetsnbextension==4.0.13
 wrapt==1.16.0
 xmltodict==0.13.0
 zipp==3.18.1
+dask==2024.3.1
+napari-fast4dreg==0.0.1
+
