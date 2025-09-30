@@ -1,21 +1,24 @@
 import os
-import numpy as np
-import matplotlib.pyplot as plt
 import re
 from pathlib import Path
 import shutil
+
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+
 import tifffile
 import cv2
 from napari_correct_drift import CorrectDrift
+from napari_fast4dreg import _fast4Dreg_functions as f4ds
 from skimage import color
 from skimage import filters
 from skimage.feature import match_template
 from scipy.signal import find_peaks_cwt
 from PIL import Image, ImageDraw, ImageFont
+
 import multiprocessing
 import dask.array as da
-from napari_fast4dreg import _fast4Dreg_functions as f4ds
-import pandas as pd
 
 
 def subtract_fov_stack(path_to_mm_channels, FOV, empty_stack_id, ana_peak_ids, method = 'phase', channel_index = 0):
@@ -496,8 +499,7 @@ def rotate_stack(path_to_stack, c=0, growth_channel_length=400, closed_ends = 'd
 
 		# Identify lines in the rotated image
 		rot_horizontal_lines, rot_vertical_lines = id_lines(ref_rotated_image)
-		test_plot_all(ref_rotated_image)
-		# find spot
+		# test_plot_all(ref_rotated_image)
 
 		# Crop around the central flow
 		crop_start, crop_end = crop_around_central_flow(rot_horizontal_lines, w, h, growth_channel_length, 1600)
@@ -854,14 +856,13 @@ def plot_lines(original_img, lines):
 	plt.show()
 
 def test_plot_all(img):
+	"""use for troubleshooting when rotation doesn't work properly"""
 	lines = find_lines(img)
 	extracted_lines = []
 	if lines is not None:
 		for line in lines:
 			extracted_lines.append(line)
 	plot_lines(img, extracted_lines)
-
-
 
 
 def apply_image_rotation(image_stack, rotation_angle, closed_ends = 'down'):
