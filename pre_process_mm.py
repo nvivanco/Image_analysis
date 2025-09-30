@@ -13,6 +13,9 @@ from skimage.feature import match_template
 from scipy.signal import find_peaks_cwt
 from PIL import Image, ImageDraw, ImageFont
 import multiprocessing
+import dask.array as da
+from napari_fast4dreg import _fast4Dreg_functions as f4ds
+import pandas as pd
 
 
 def subtract_fov_stack(path_to_mm_channels, FOV, empty_stack_id, ana_peak_ids, method = 'phase', channel_index = 0):
@@ -395,6 +398,7 @@ def midpoint_distance(line, center):
     distance = np.sqrt((midpoint_x - center[0])**2 + (midpoint_y - center[1])**2)
     return distance
 
+
 def crop_around_central_flow(h_lines, w, h, growth_channel_length=400, threshold=700):
     """
     Crops an image around the central flow channel based on detected horizontal lines.
@@ -410,7 +414,13 @@ def crop_around_central_flow(h_lines, w, h, growth_channel_length=400, threshold
     Returns:
         A tuple containing the start and end indices for cropping along the vertical axis
         (y-axis) if a suitable line is found, otherwise None.
-            # if h_lines:
+    """
+
+    center_x, center_y = w // 2, h // 2
+    closest_line = None
+    min_difference = float('inf')
+
+    if h_lines:
         y_coordinates = [line[0][1] for line in h_lines]
         median_y = np.median(y_coordinates)
 
@@ -421,32 +431,17 @@ def crop_around_central_flow(h_lines, w, h, growth_channel_length=400, threshold
             if difference < min_difference:
                 min_difference = difference
                 closest_line = line
-    """
-    center_x, center_y = w // 2, h // 2
-    closest_line = None
-    min_difference = float('inf')
-    max_length = -1
-
-    if h_lines:
-        for line in h_lines:
-            # A line is represented as [[x1, y1, x2, y2]]
-            x1, y1, x2, y2 = line[0]
-
-            # Calculate the length of the line
-            length = abs(x2 - x1)
-
-            if length > max_length:
-                max_length = length
-                closest_line = line
 
         # Filter lines based on distance from the center and the threshold
+        # We'll consider the 'closest_line' found earlier as the primary candidate
+        # and then apply the threshold.
         if closest_line is not None:
             y_of_closest_line = closest_line[0][1]
             if abs(y_of_closest_line - center_y) <= threshold:
                 # Determine crop boundaries
                 crop_start = max(y_of_closest_line, 0)
-                # Ensure crop_end doesn't exceed image height
-                crop_end = min(y_of_closest_line + growth_channel_length, h)
+                crop_end = min(y_of_closest_line + growth_channel_length, h) # Ensure crop_end doesn't exceed image height
+
                 return crop_start, crop_end
             else:
                 print(f"The closest line (y={y_of_closest_line}) is outside the {threshold} pixel threshold from the center (y={center_y}).")
@@ -457,7 +452,6 @@ def crop_around_central_flow(h_lines, w, h, growth_channel_length=400, threshold
     else:
         print("No horizontal lines were detected in the image.")
         return None
-
 
 def rotate_stack(path_to_stack, c=0, growth_channel_length=400, closed_ends = 'down'):
 	"""Rotates and crops a stack of cyx or tcyx format files.
@@ -506,7 +500,7 @@ def rotate_stack(path_to_stack, c=0, growth_channel_length=400, closed_ends = 'd
 		# find spot
 
 		# Crop around the central flow
-		crop_start, crop_end = crop_around_central_flow(rot_horizontal_lines, w, h, growth_channel_length, 500)
+		crop_start, crop_end = crop_around_central_flow(rot_horizontal_lines, w, h, growth_channel_length, 1600)
 
 		# Rotate and crop the entire stack
 		rotated_stack = apply_image_rotation(stacked_img, rotation_angle, closed_ends)
@@ -545,7 +539,7 @@ def detect_clear_image(image):
         return True
 
 
-def drift_correct(root_dir, experiment_name, c=0):
+def drift_correct(root_dir, experiment_name, fast4, c=0):
 	"""
 	Arg
 	root_dir: parent directory containing multiple 'Pos#' directories,
@@ -554,12 +548,17 @@ def drift_correct(root_dir, experiment_name, c=0):
 	experiment_name: unique id to label output files
 	c = int representing phase channel index
 	output: drift corrected files across multiple positions and timepoints.
-
+	
+	09/09/25: Added boolean arg fast4. if set to true will run drift correctio using fast4Dreg drift corerection, if set to false 
+	Napari drift correction will be used
 	"""
 
 	hyperstacked_path, time_dict = hyperstack_tif_tcyx(root_dir, experiment_name, c)
+	if fast4 == True:
+		drift_corrected_path = drift_correction_f4ds(hyperstacked_path)
+	else: 
+		drift_corrected_path = drift_correction_napari(hyperstacked_path)
 
-	drift_corrected_path = drift_correction_napari(hyperstacked_path)
 
 	return drift_corrected_path
 
@@ -635,6 +634,97 @@ def drift_correction_napari(hyperstacked_path):
 				tifffile.imwrite(str(img_cor_file), img_cor)
 	return output_dir_path
 
+# 09/09/25:
+# implementation of the fast4dreg algorithm, requires dask, and from napari_fast4dreg _fast4Dreg_functions as f4ds
+# Could use some cleaning up
+def drift_correction_f4ds(hyperstacked_path):
+    output_dir_path =  os.path.join(hyperstacked_path, 'drift_corrected')
+    os.makedirs(output_dir_path, exist_ok=True)
+
+    ref_channel = r"1"
+    correct_xy = True
+    correct_z = False
+    correct_center_rotation = False
+    crop_output = True
+    export_csv = True
+    
+    for filename in os.listdir(hyperstacked_path):
+        if filename.endswith('.tif') or filename.endswith('.tiff'):
+            if re.match(r'(.*)_xy(\d+)\.', filename):
+                match = re.match(r'(.*)_xy(\d+)\.', filename)
+                experiment, position = match.groups()
+                img_path = os.path.join(hyperstacked_path, filename)
+                hyperstacked_img = tifffile.imread(img_path)
+                print(hyperstacked_img.shape)
+                hyperstacked_img = hyperstacked_img.swapaxes(0,1)
+                hyperstacked_img = np.expand_dims(hyperstacked_img, axis = 2)
+
+                tmp_path = str(output_dir_path + '/tmp_data/')
+                ref_channel = int(ref_channel) # may need to change this 
+                if ref_channel > len(hyperstacked_img[0]):
+                    ref_channel = len(hyperstacked_img[0])
+
+                data = da.asarray(hyperstacked_img)
+                data = data.rechunk('auto')
+                new_shape = data.chunksize
+                data = f4ds.write_tmp_data_to_disk(tmp_path, data, new_shape)
+                print('Imge imported')
+
+                if correct_xy == True:
+                    xy_drift = f4ds.get_xy_drift(data, 0)
+                    tmp_data = f4ds.apply_xy_drift(data, xy_drift)
+                    tmp_data = f4ds.write_tmp_data_to_disk(tmp_path, tmp_data, new_shape)
+                else:
+                    tmp_data = dataxy_drift = np.asarray([0,0])
+                    xy_drift = np.asarray([0,0])
+
+                if correct_z == True: 
+                    # Correct z-drift
+                    z_drift = f4ds.get_z_drift(data, ref_channel)
+                    tmp_data = f4ds.apply_z_drift(tmp_data, z_drift)
+
+                    # save intermediate result
+                    tmp_data = f4ds.write_tmp_data_to_disk(tmp_path, tmp_data, new_shape)
+
+                else: 
+                    z_drift = np.asarray([[0,0]])
+
+                if crop_output == True:
+                    tmp_data = f4ds.crop_data(tmp_data, xy_drift, z_drift)
+                    new_shape = (np.shape(tmp_data)[0],1,np.shape(tmp_data)[-3],np.shape(tmp_data)[-2],np.shape(tmp_data)[-1])
+
+                    # save temp result
+                    crop_path = output_dir_path +"/cropped_tmp_data"
+                    da.to_npy_stack(crop_path,tmp_data, axis = 1)
+                    
+                    shutil.rmtree(tmp_path)
+                    shutil.move(crop_path, tmp_path)
+                    tmp_data = f4ds.read_tmp_data(tmp_path, new_shape)
+
+                if correct_center_rotation == True: 
+                    # Correct Rotation 
+                    alpha = f4ds.get_rotation(tmp_data, ref_channel)
+                    tmp_data = f4ds.apply_alpha_drift(tmp_data, alpha)
+                    
+                    # save intermediate result
+                    tmp_data = f4ds.write_tmp_data_to_disk(tmp_path, tmp_data, new_shape)
+                else:
+                    alpha = [0]
+
+                if export_csv == True:
+                    # Export .csv
+                    print("Export drifts to csv.")
+                    x = pd.DataFrame({'x-drift': xy_drift[:,0]})
+                    y = pd.DataFrame({'y-drift': xy_drift[:,1]})
+                    z = pd.DataFrame({'z-drift': z_drift[:,0]})
+                    r = pd.DataFrame({'rotation': alpha})
+                    df = pd.concat([x,y,z,r], axis=1)
+                    df = df.fillna(0)
+                    df.to_csv("drifts.csv")
+                img_cor_file = Path(output_dir_path) / f"drift_cor_{experiment}_xy{position}.tif"
+
+                tifffile.imwrite(img_cor_file, tmp_data, ome=True)
+    return output_dir_path
 
 def org_by_timepoint(input_dirs):
 	"""Group files by time and channel id, it does not take into account the z axis
