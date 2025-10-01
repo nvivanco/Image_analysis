@@ -1,10 +1,12 @@
-Adapted from napari-mm3 by Jun Lab (https://github.com/junlabucsd/napari-mm3)
-
-Reference: Tools and methods for high-throughput single-cell imaging with the mother machine. Ryan Thiermann, Michael Sandler, Gursharan Ahir, John T. Sauls, Jeremy W. Schroeder, Steven D. Brown, Guillaume Le Treut, Fangwei Si, Dongyang Li, Jue D. Wang, Suckjoon Jun. eLife12:RP88463 https://doi.org/10.7554/eLife.88463.4
-
 # Installation 
-Create a python environment with version 3.9.6 and install with:
+Create a python environment with version 3.11.8 and install with:
 pip install -r requirements.txt
 
-# Tutorial on a Jupyter notebook: 
-https://github.com/nvivanco/Image_analysis/blob/main/bacteria_segmentation_tracking_mm_tutorial.ipynb
+# Tutorial (to update)
+mm_raw_tiffs_to_tracked_cells.py
+
+Cell segmentation approach adapted from napari-mm3 by Jun Lab (https://github.com/junlabucsd/napari-mm3)
+Reference:  R. Thiermann et al., "Tools and methods for high-throughput single-cell imaging with the mother machine," eLife, vol. 12, p. RP88463, 2023.
+
+Cell tracking GNN architecture inspired by Cell-tracker-GNN (https://github.com/talbenha/cell-tracker-gnn)
+Reference:  T. Ben-Haim and T. Riklin-Raviv, "Graph Neural Network for Cell Tracking in Microscopy Videos," in Proceedings of the European Conference on Computer Vision (ECCV), 2022.
