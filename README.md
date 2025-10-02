@@ -44,7 +44,7 @@ We use **Poetry** for dependency management to ensure a reproducible environment
 
 -----
 
-## 2\. Usage and Tutorial 
+## 2\. Usage and Tutorial (todo: update)
 
 The primary entry point for processing data is the `mm_raw_tiffs_to_tracked_cells.py` script.
 
@@ -90,7 +90,7 @@ The core tracking logic relies on a custom Graph Neural Network architecture. Fu
 
 -----
 
-## 4\. Licensing and Citation 📜
+## 4\. Licensing and Citation
 
 ### License
 
