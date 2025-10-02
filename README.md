@@ -1,7 +1,3 @@
-Here is the full content for your `README.md` file, ready to be copied and pasted into your code repository.
-
------
-
 # DuMM Bacteria Tracker (GNN-Based Cell Lineage Tracking)
 
 This repository contains the source code for the **DuMM Bacteria Tracker**, a Python package (`mmtrack`) dedicated to highly accurate cell segmentation and lineage tracking for single-cell time-lapse microscopy data, particularly within **Mother Machine** devices.
