@@ -236,6 +236,76 @@ poetry run python 03_cell_segmentation.py \
 The script automatically displays the segmented output for visual confirmation. After running this stage, you **must visually inspect the segmentation masks** to ensure they correctly identify cell regions before proceeding to the next stage of feature extraction.
 
 
+## Running Stage 4: Feature Extraction and Data Consolidation 
+
+The script `04_feature_extraction.py` performs the crucial step of converting segmented masks into quantifiable cellular data. It creates kymographs, extracts morphological and intensity features using `skimage.measure.regionprops_table`, and consolidates all results into a single pandas `.pkl` file per experiment.
+
+This stage is designed for maximum automation: if no specific time ranges are provided, it automatically finds all segmented files and uses the full time range of each stack.
+
+### Basic Automated Execution (Recommended)
+
+If you intend to use the entire time-lapse for every segmented trench, simply provide the `--base-dir`. The script will automatically discover all segmented TIFF files (`mm3_segmented*.tif`) and calculate the `start` (0) and `end` (last frame index) for each.
+
+```bash
+# Example: Full automation mode
+poetry run python 04_feature_extraction.py \
+    --base-dir '/path/to/DuMM_image_analysis'
+```
+
+-----
+
+### Custom Time Range Override
+
+If you need to analyze only a specific time window for a given trench (e.g., excluding frames where a cell was lost or the trench clogged), you can pass the **`--time-range-dict`** as a JSON string.
+
+Any trench **omitted** from this dictionary will still be processed automatically using the full time range. You can also set the `end` frame to `null` to use a custom `start` frame while still defaulting the `end` to the size of the TIFF file.
+
+#### `--time-range-dict` Format
+
+The dictionary must be a single, valid JSON string:
+
+```json
+{
+   "experiment_name": {
+      "FOV_ID": {
+         "trench_ID_A": {"start": 0, "end": 75},
+         "trench_ID_B": {"start": 10, "end": null} 
+      }
+   }
+}
+```
+
+#### Example of Override Execution
+
+```bash
+# Define custom time ranges for specific trenches
+TIME_DICT='{"DUMM_CL008_giTG068_072925": {"007": {"992": {"start": 10, "end": 60}, "1219": {"start": 0, "end": null}}}}'
+
+poetry run python 04_feature_extraction.py \
+    --base-dir '/path/to/DuMM_image_analysis' \
+    --time-range-dict "${TIME_DICT}"
+```
+
+### Output
+
+The script generates the following:
+
+1.  **Kymograph Images:** Saves kymographs for phase, mask, and fluorescence channels in subdirectories (`mask_kymos/`, `fluor_kymos/`).
+2.  **Consolidated DataFrame:** Saves a single pickled pandas file (`.pkl`) per experiment folder (e.g., `all_cell_data_DUMM_CL008_giTG068_072925.pkl`) in the `--base-dir`. This file contains all extracted features and is the primary input for the final GNN tracking stage.
+
+-----
+
+### Optional Arguments
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `--base-dir` | `str` | *N/A* | **(Required)** Root path containing all experiment folders. |
+| `--time-range-dict` | `str` | `''` | **(Optional)** JSON string for custom trench time ranges. |
+| `--phase-channel` | `str` | `'0'` | Phase channel index string used in file naming. |
+| `--fluor-channel` | `str` | `'1'` | Fluor channel index string used in file naming. |
+
+
+
 ## 3\. GNN Model and Training Details
 
 The core tracking logic relies on a custom Graph Neural Network architecture. Full details on the architecture and performance metrics are available on the [Hugging Face Model Card](https://www.google.com/search?q=https://huggingface.co/nvivanco/DuMM_bacteria_track).
