@@ -36,7 +36,7 @@ We use **Poetry** for dependency management to ensure a reproducible environment
     poetry run python download_assets.py
     ```
 
-    *Note: This command saves the `best_link_prediction_model.pt` file to your local machine for inference.*
+    *Note: This command saves the `mm_link_prediction_model.pt` file to your local machine for inference.*
 
 -----
 
@@ -153,7 +153,6 @@ poetry run python 02_background_subtraction.py \
     --phase-index 2 \
     --fluor-index 3
 ```
-
 
 ## Running Stage 3: Cell Segmentation
 
@@ -304,6 +303,72 @@ The script generates the following:
 | `--phase-channel` | `str` | `'0'` | Phase channel index string used in file naming. |
 | `--fluor-channel` | `str` | `'1'` | Fluor channel index string used in file naming. |
 
+
+## Running Stage 5: GNN Lineage Tracking
+
+The script `05_lineage_tracking.py` is the final step, which aggregates the feature data from all experiments, normalizes the features, prepares the data for the Graph Neural Network (GNN) model, runs the lineage link prediction, and saves the final tracked results.
+
+### Prerequisites
+
+1.  **Stage 4 Data:** You must have successfully run `04_feature_extraction.py`, resulting in `all_cell_data_*.pkl` files in your `--base-dir`.
+2.  **Trained Model:** You must have the trained GNN model file (default name: `mm_link_prediction_model.pt`) accessible to the script.
+
+### 1\. Defining the Strain/Experiment Map
+
+This script requires the **`--strain-dict`** to map which feature file (`.pkl`) corresponds to which genetic strain and which FOVs within that file should be considered for that strain.
+
+The value of this argument must be a single, properly formatted **JSON string** with the following structure:
+
+```json
+{
+   "gene_A": {
+      "exp_directory_name_1": ["FOV_ID_A", "FOV_ID_B"],
+      "exp_directory_name_2": ["FOV_ID_C"]
+   },
+   "gene_B": {
+      "exp_directory_name_3": ["FOV_ID_D"]
+   }
+}
+```
+
+### 2\. Execution
+
+The script will automatically look for the GNN model at the default path: **`models/mm_link_prediction_model.pt`**.
+
+```bash
+# Example: Using the required strain dictionary
+STRAIN_DICT='{"chpS": {"DUMM_giTG62_Glucose_012925": ["005"]}, "baeS": {"DUMM_giTG66_Glucose_012325": ["003"]}}'
+
+poetry run python 05_lineage_tracking.py \
+    --base-dir '/path/to/DuMM_image_analysis' \
+    --strain-dict "${STRAIN_DICT}"
+```
+
+### 3\. Optional Arguments
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `--base-dir` | `str` | *N/A* | **(Required)** Root path containing all experiment folders and the `.pkl` feature files. |
+| `--strain-dict` | `str` | *N/A* | **(Required)** JSON string mapping strains/genes to experiment directories and FOVs. |
+| `--model-path` | `str` | `models/mm_link_prediction_model.pt` | Path to the trained GNN model weights. |
+| `--prob-threshold` | `float` | `0.8` | Minimum GNN prediction probability required to accept a cell link as a valid lineage connection. |
+| `--output-filename` | `str` | `tracked_all_cell_data.pkl` | The filename for the final DataFrame containing the predicted lineages, saved to the `--base-dir`. |
+
+**Example of overriding the probability threshold:**
+
+```bash
+STRAIN_DICT='{...}' # Use the full dictionary as defined above
+
+poetry run python 05_lineage_tracking.py \
+    --base-dir '/path/to/DuMM_image_analysis' \
+    --strain-dict "${STRAIN_DICT}" \
+    --prob-threshold 0.95
+```
+
+### Output
+
+1.  **Tracked DataFrame:** A final pickled pandas file (default: `tracked_all_cell_data.pkl`) saved in the `--base-dir`. This file contains all original features plus a new column, **`predicted_lineage`**, used for plotting.
+2.  **Kymograph Plots:** The script plots the predicted lineages over the corresponding phase and fluorescence kymographs for visual confirmation, saving the resulting images to the relevant experiment subdirectories.
 
 
 ## 3\. GNN Model and Training Details

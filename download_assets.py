@@ -4,7 +4,7 @@ from huggingface_hub import hf_hub_download
 
 # --- Configuration ---
 HF_REPO_ID = "nvivanco/DuMM_bacteria_track"
-HF_FILENAME = "best_link_prediction_model.pt"
+HF_FILENAME = "mm_link_prediction_model.pt"
 LOCAL_MODEL_DIR = "models"
 LOCAL_MODEL_PATH = os.path.join(LOCAL_MODEL_DIR, HF_FILENAME)
 
