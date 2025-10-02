@@ -63,9 +63,9 @@ Upon successful completion, the script will output the path to the extracted ima
 
 ```markdown
 #################################################################
-## USER ACTION REQUIRED: Inspect TRENCH MASKS and TIME-LAPSE   ##
-## Next Step: Determine 'empty_stack_id' and 'ana_peak_ids'. ##
-## Use <path_to_mm_channels> as the input for Stage 2.         ##
+# USER ACTION REQUIRED: Inspect TRENCH MASKS and TIME-LAPSE   
+# Next Step: Determine 'empty_stack_id' and 'ana_peak_ids'. 
+# Use <path_to_mm_channels> as the input for Stage 2.         
 #################################################################
 ```
 
@@ -99,7 +99,7 @@ poetry run python 01_image_correction.py \
 ```
 
 
-## Running Stage 2: Background Subtraction 🔬
+## Running Stage 2: Background Subtraction
 
 The script `02_background_subtraction.py` performs phase contrast and fluorescence background subtraction using an empty trench identified by the user in the previous stage.
 
@@ -153,6 +153,87 @@ poetry run python 02_background_subtraction.py \
     --phase-index 2 \
     --fluor-index 3
 ```
+
+
+## Running Stage 3: Cell Segmentation
+
+The script `03_cell_segmentation.py` performs the actual cell segmentation using `cell_segmentation.segment_chnl_stack()`. Since segmentation results are highly sensitive to image brightness, this script exposes all key segmentation parameters for tuning.
+
+It calculates the `end-frame` dynamically based on the input file size unless the value is explicitly provided.
+
+### Prerequisites
+
+You must first visually inspect the images processed in Stage 2 to determine the correct segmentation parameters for your data.
+
+### 1\. Defining the Target Data
+
+This script iterates over multiple experiments, FOVs, and trenches, so you must define which data to process using the **`--exp-dict`** argument.
+
+The value of this argument must be a single, properly formatted **JSON string** with the following structure:
+
+```json
+{
+   "exp_directory_name_1": {
+      "FOV_ID_A": ["trench_ID_1", "trench_ID_2"],
+      "FOV_ID_B": ["trench_ID_3"]
+   },
+   "exp_directory_name_2": {
+      "FOV_ID_C": ["trench_ID_4"]
+   }
+}
+```
+
+### 2\. Basic Execution
+
+Run the script from your project root, replacing the placeholder path and providing the experiment dictionary as a JSON string.
+
+```bash
+# Example: Using a single experiment
+EXP_DICT='{"DUMM_CL008_giTG068_072925": {"007": ["992", "1219", "1749"]}}'
+
+poetry run python 03_cell_segmentation.py \
+    --base-dir '/path/to/DuMM_image_analysis' \
+    --exp-dict "${EXP_DICT}"
+```
+
+### 3\. Tuning Segmentation Parameters
+
+The script defaults to parameters suitable for low phase-contrast exposure (`OTSU_threshold=0.5`). If your images are brighter, you will need to override these defaults.
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `--base-dir` | `str` | *N/A* | **(Required)** Root path containing all experiment folders. |
+| `--exp-dict` | `str` | *N/A* | **(Required)** JSON string of the experiments/trenches to segment. |
+| `--otsu-threshold` | `float` | `0.5` | Threshold for segmentation (range 0.5 to 1.5). **Adjust based on image brightness.** |
+| `--first-opening` | `int` | `4` | Size of the first morphological opening (e.g., 3, 4, or 5). |
+| `--distance-threshold` | `float` | `3.0` | Distance threshold for watershed seeding (e.g., 1.0 to 3.0). |
+| `--second-opening-size` | `int` | `3` | Size of the second morphological opening (e.g., 1, 2, or 3). |
+| `--min-cell-area` | `int` | `100` | Minimum cell area in pixels. |
+| `--max-cell-area` | `int` | `1000` | Maximum cell area in pixels. |
+| `--small-merge-area-threshold`| `int` | `100` | Threshold for merging small segmented regions. |
+| `--end-frame` | `int` | `None` | Last time frame index to consider. **If omitted, calculated dynamically.** |
+| `--phase-channel` | `str` | `'0'` | Phase channel index as string. |
+
+**Example of overriding for high phase exposure (brighter images):**
+
+```bash
+# Define the experiment dictionary (same as above)
+EXP_DICT='{"DUMM_CL008_giTG068_072925": {"007": ["992", "1219", "1749"]}}'
+
+poetry run python 03_cell_segmentation.py \
+    --base-dir '/path/to/DuMM_image_analysis' \
+    --exp-dict "${EXP_DICT}" \
+    --otsu-threshold 1.5 \
+    --first-opening 3 \
+    --distance-threshold 1.5 \
+    --second-opening-size 1 \
+    --max-cell-area 800 \
+    --small-merge-area-threshold 50
+```
+
+### 4\. Required User Action
+
+The script automatically displays the segmented output for visual confirmation. After running this stage, you **must visually inspect the segmentation masks** to ensure they correctly identify cell regions before proceeding to the next stage of feature extraction.
 
 
 ## 3\. GNN Model and Training Details
