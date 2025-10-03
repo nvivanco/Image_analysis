@@ -650,21 +650,18 @@ def drift_correction_napari(hyperstacked_path):
 				tifffile.imwrite(str(img_cor_file), img_cor)
 	return output_dir_path
 
-# 09/09/25:
-# implementation of the fast4dreg algorithm, requires dask, and from napari_fast4dreg _fast4Dreg_functions as f4ds
-# Could use some cleaning up
+
 def drift_correction_f4ds(hyperstacked_path):
-    output_dir_path =  os.path.join(hyperstacked_path, 'drift_corrected')
+    output_dir_path = os.path.join(hyperstacked_path, 'drift_corrected')
     os.makedirs(output_dir_path, exist_ok=True)
 
-    ref_channel = r"1"
+    ref_channel = 1  # Using integer 1 directly
     correct_xy = True
-    correct_z = False
+    correct_z = False  # Keep this False since we want TCYX
     correct_center_rotation = False
     crop_output = True
     export_csv = False
 
-    
     for filename in os.listdir(hyperstacked_path):
         if filename.endswith('.tif') or filename.endswith('.tiff'):
             if re.match(r'(.*)_xy(\d+)\.', filename):
@@ -672,77 +669,79 @@ def drift_correction_f4ds(hyperstacked_path):
                 experiment, position = match.groups()
                 img_path = os.path.join(hyperstacked_path, filename)
                 hyperstacked_img = tifffile.imread(img_path)
-                print(hyperstacked_img.shape)
-                hyperstacked_img = hyperstacked_img.swapaxes(0,1)
-                hyperstacked_img = np.expand_dims(hyperstacked_img, axis = 2)
 
-                # tmp_path = str(output_dir_path + '/tmp_data/')
-                ref_channel = int(ref_channel) # may need to change this 
-                if ref_channel > len(hyperstacked_img[0]):
-                    ref_channel = len(hyperstacked_img[0])
+                # Assume input is TCYX (Time, Channel, Y, X)
+                initial_shape = hyperstacked_img.shape
+                print(f"Input shape (assumed TCYX): {initial_shape}")
 
-                # The data will now remain a Dask array in memory until the final tifffile.imwrite
+                # The f4ds library is designed for TCZYX. To use it reliably, 
+                # we temporarily insert a Z-axis, then remove it later.
+
+                # 1. Ensure input is CTYX by swapping (matches your original swap)
+                hyperstacked_img = hyperstacked_img.swapaxes(0, 1)
+
+                # 2. Insert Z-axis (Z=1) to get C T Z Y X, as f4ds expects 5D data
+                hyperstacked_img = np.expand_dims(hyperstacked_img, axis=2)
+
+                # 3. Swap back to T C Z Y X (assuming your original code did this implicitly)
+                # Let's ensure the data is TCZYX for f4ds:
+                # This ensures T is the first axis (0) for drift calculation.
+                hyperstacked_img = hyperstacked_img.swapaxes(0, 1)  # Now: T C Z Y X
+
+                # Convert ref_channel to 0-based index
+                ref_channel = int(ref_channel) - 1
+                if ref_channel >= hyperstacked_img.shape[1]:
+                    ref_channel = hyperstacked_img.shape[1] - 1
+
                 data = da.asarray(hyperstacked_img)
                 data = data.rechunk('auto')
-                new_shape = data.chunksize
-                
-				# Don't save temp file for now to save disk space
-                # data = f4ds.write_tmp_data_to_disk(tmp_path, data, new_shape) 
 
-                if correct_xy == True:
-                    xy_drift = f4ds.get_xy_drift(data, 0)
+                # --- Drift Correction and Cropping (using f4ds) ---
+                tmp_data = data
+                xy_drift = np.asarray([0, 0])
+                z_drift = np.asarray([[0, 0]])  # Z-drift is kept at zero
+
+                if correct_xy:
+                    # Assumes f4ds.get_xy_drift is robust to the Z-axis being 1
+                    xy_drift = f4ds.get_xy_drift(data, ref_channel)
                     tmp_data = f4ds.apply_xy_drift(data, xy_drift)
-                    # tmp_data = f4ds.write_tmp_data_to_disk(tmp_path, tmp_data, new_shape)
-                else:
-                    tmp_data = data
-                    xy_drift = np.asarray([0,0])
 
-                if correct_z == True: 
-                    # Correct z-drift
-                    z_drift = f4ds.get_z_drift(tmp_data, ref_channel)
-                    tmp_data = f4ds.apply_z_drift(tmp_data, z_drift)
-
-                    # tmp_data = f4ds.write_tmp_data_to_disk(tmp_path, tmp_data, new_shape)
-                else: 
-                    z_drift = np.asarray([[0,0]])
-
-                if crop_output == True:
+                if crop_output:
+                    # Crop data maintains the 5D shape (T C Z Y X)
                     tmp_data = f4ds.crop_data(tmp_data, xy_drift, z_drift)
-                    new_shape = (np.shape(tmp_data)[0],1,np.shape(tmp_data)[-3],np.shape(tmp_data)[-2],np.shape(tmp_data)[-1])
 
-                    # for now don't save temp result
-                    # crop_path = output_dir_path +"/cropped_tmp_data"
-                    # da.to_npy_stack(crop_path,tmp_data, axis = 1)
-                    
-                    # shutil.rmtree(tmp_path)
-                    # shutil.move(crop_path, tmp_path)
-                    # tmp_data = f4ds.read_tmp_data(tmp_path, new_shape) # This line reloads from disk
-                    
-                    # If you also want to stop creating the 'tmp_data' directory:
-                    # shutil.rmtree(tmp_path, ignore_errors=True) # Use this if the directory was created earlier
-
-                if correct_center_rotation == True: 
-                    # Correct Rotation 
+                if correct_center_rotation:
+                    # Correct Rotation
                     alpha = f4ds.get_rotation(tmp_data, ref_channel)
                     tmp_data = f4ds.apply_alpha_drift(tmp_data, alpha)
-                    
-                    # tmp_data = f4ds.write_tmp_data_to_disk(tmp_path, tmp_data, new_shape)
                 else:
                     alpha = [0]
 
                 if export_csv == True:
                     # Export .csv
                     print("Export drifts to csv.")
-                    x = pd.DataFrame({'x-drift': xy_drift[:,0]})
-                    y = pd.DataFrame({'y-drift': xy_drift[:,1]})
-                    z = pd.DataFrame({'z-drift': z_drift[:,0]})
+                    x = pd.DataFrame({'x-drift': xy_drift[:, 0]})
+                    y = pd.DataFrame({'y-drift': xy_drift[:, 1]})
+                    z = pd.DataFrame({'z-drift': z_drift[:, 0]})
                     r = pd.DataFrame({'rotation': alpha})
-                    df = pd.concat([x,y,z,r], axis=1)
+                    df = pd.concat([x, y, z, r], axis=1)
                     df = df.fillna(0)
                     df.to_csv("drifts.csv")
+
+                # FINAL STEP: Convert TCZYX back to TCYX
+
+                # 1. Drop the Z-axis (axis 2) which has a size of 1
+                final_array = tmp_data[:, :, 0, :, :]
+
+                # 2. Re-evaluate final shape (should be TCYX)
+                print(f"Output shape (TCYX): {final_array.shape}")
+
                 img_cor_file = Path(output_dir_path) / f"drift_cor_{experiment}_xy{position}.tif"
 
-                tifffile.imwrite(img_cor_file, tmp_data, ome=True)
+                # tifffile.imwrite writes the final_array (T C Y X)
+                # Note: OME metadata is optional but usually good practice.
+                tifffile.imwrite(img_cor_file, final_array, ome=True)
+
     return output_dir_path
 
 def org_by_timepoint(input_dirs):

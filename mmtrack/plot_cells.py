@@ -13,12 +13,29 @@ from skimage.measure import find_contours
 
 def _create_figure_and_axes(phase_stack, num_images):
     """Creates the Matplotlib figure and axes."""
+    
+    # Calculate figure size based on image dimensions
     figxsize = phase_stack.shape[2] * num_images / 100.0
     figysize = phase_stack.shape[1] / 100.0
-    fig, axs = plt.subplots(nrows=1, ncols=num_images, figsize=(figxsize, figysize),
-                            facecolor="white", edgecolor="black",
-                            gridspec_kw={'wspace': 0, 'hspace': 0, 'left': 0, 'right': 1, 'top': 1, 'bottom': 0})
-    return fig, axs.flatten()
+    
+    fig, axs = plt.subplots(
+        nrows=1, 
+        ncols=num_images, 
+        figsize=(figxsize, figysize),
+        facecolor="white", 
+        edgecolor="black",
+        gridspec_kw={'wspace': 0, 'hspace': 0, 'left': 0, 'right': 1, 'top': 1, 'bottom': 0}
+    )
+    
+
+    if num_images == 1:
+        # If there's only one subplot, axs is a single Axes object. Wrap it in an array.
+        axs_array = np.array([axs])
+    else: 
+        # If there are multiple subplots, axs is already a 1D or 2D NumPy array. Flatten it.
+        axs_array = axs.flatten()
+        
+    return fig, axs_array
 
 def _create_color_dict(data_source):
     """Creates the color dictionary based on the data source."""

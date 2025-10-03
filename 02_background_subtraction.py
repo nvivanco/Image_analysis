@@ -41,7 +41,7 @@ def run_background_subtraction(input_path, fov, empty_id, ana_ids, phase_idx, fl
 		channel_index=fluor_idx  # Now uses the command-line argument
 	)
 
-	print("\n✅ Pipeline Stage 2 (Background Subtraction) Complete.")
+	print("\nPipeline Stage 2 (Background Subtraction) Complete.")
 
 
 if __name__ == "__main__":
