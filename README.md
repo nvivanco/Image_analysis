@@ -61,34 +61,48 @@ Close the window to proceed with pipeline.
 
 A second interactive window will pop up with the identified microfluidic channels/trenches that capture cells. Each channel has a label in red at the bottom that needs to be used for analysis in the next step. This image will also be saved as a tif file.
 
-Ultimately the directory fill be structured as such:
 
+## Directory Structure Overview
+
+The project uses a structured directory where raw data is sequentially processed into hyperstacks, drift-corrected, rotated, and finally segmented.
+
+```
 <path/to/raw/data>/
 └── <exp_folder>/
-    ├── Pos0/   <--  Directory of FOV contains individual TIFF files for each phase and fluorescent channels and each timepoint
+    ├── Pos0/
     ├── Pos1/
     ├── ...
     │
     └── hyperstacked/
         ├── hyperstacked_xy0.tif
-        ├── hyperstacked_xy1.tif  <--  File is a hyperstack of the entire, unprocessed FOV, including all phase/fluorescent channels and timepoints
         ├── ...
         │
         └── drift_corrected/
-            ├── drift_cor_<experiment>_xy0.tif
-            ├── drift_cor_<experiment>_xy1.tif  <--  File is a hyperstack of the entire, drift-corrected FOV, including all phase/fluorescent channels and timepoints
+            ├── drift_cor_<exp>_xy0.tif
             ├── ...
             │
             └── rotated/
                 ├── rotated_xy0.tif
-                ├── rotated_xy1.tif  <--  File is a hyperstack of the entire, rotated FOV, including all phase/fluorescent channels and timepoints
                 ├── ...
                 │
                 └── mm_channels/
-                    ├── FOV000_mm_channel_mask.tif  <-- File contains microfluidic channels with IDs needed for processing
-                    ├── FOV001_mm_channel_mask.tif
-                    ├── FOV000_region_01.tif <-- File is a hyperstack of identified microfluidic channels, including all phase/fluorescent channels and timepoints
+                    ├── FOV###_mm_channel_mask.tif
+                    ├── FOV###_region_##.tif
                     └── ...
+```
+
+-----
+
+## Detailed File Descriptions
+
+| File/Directory | Location | Purpose |
+| :--- | :--- | :--- |
+| **`Pos0/`, `Pos1/`** | `<exp_folder>/` | Directory of **Raw TIFFs** for each Field of View (FOV). Contains individual TIFF files for each channel and timepoint. |
+| **`hyperstacked/`** | `.../<exp_folder>/` | Contains hyperstacks of the entire, **unprocessed** FOV (all channels/timepoints). |
+| **`drift_corrected/`** | `.../hyperstacked/` | Contains hyperstacks after **X-Y drift correction**. |
+| **`rotated/`** | `.../drift_corrected/` | Contains hyperstacks after **rotation correction**. |
+| **`FOV###_mm_channel_mask.tif`** | `.../mm_channels/` | **Segmented Mask** file containing the identified microfluidic channels with unique, labeled IDs needed for subsequent analysis steps. |
+| **`FOV###_region_##.tif`** | `.../mm_channels/` | Hyperstack file containing only the cropped time-series data for a **single identified microfluidic channel/trench** (includes all phase/fluorescent channels). |
 
 ### User Action and Output
 
