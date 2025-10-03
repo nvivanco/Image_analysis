@@ -2,7 +2,7 @@ import argparse
 import os
 import json
 import tifffile as tf
-from mmtrack import cell_segmentation, plot_cells
+from mmtrack import mm_cell_segmentation, plot_cells
 
 
 
@@ -84,7 +84,7 @@ def run_cell_segmentation(base_dir, exp_dict_json, start_frame, end_frame,
 				print(f"    -> Segmenting Trench {peak_id}...")
 
 				# --- SEGMENTATION ---
-				cell_segmentation.segment_chnl_stack(
+				mm_cell_segmentation.segment_chnl_stack(
 					path_to_phase_stack,
 					output_path,
 					OTSU_threshold=otsu_thresh,
@@ -107,7 +107,7 @@ def run_cell_segmentation(base_dir, exp_dict_json, start_frame, end_frame,
 				)
 
 	print("\nPipeline Stage 3 (Cell Segmentation) Complete.")
-	print("\n✅ Pipeline Stage 3 (Cell Segmentation) Complete.")
+	print("\nPipeline Stage 3 (Cell Segmentation) Complete.")
 	print("\n\n#################################################################")
 	print("# USER ACTION REQUIRED: Visually inspect segmentation results.")
 	print("# Adjust segmentation parameters if cell boundaries are wrong.")
