@@ -37,26 +37,50 @@ def _create_figure_and_axes(phase_stack, num_images):
         
     return fig, axs_array
 
+
 def _create_color_dict(data_source):
     """Creates the color dictionary based on the data source."""
-    if isinstance(data_source, np.ndarray):  # For mask_path
-        num_colors = max(20, len(np.unique(data_source)))
-    elif isinstance(data_source, dict):  # For cells_dict
-        num_colors = max(20, len(data_source))
-    elif isinstance(data_source, pd.DataFrame):  # For cells_df
-        num_colors = max(20, data_source['cell_id'].nunique())  # Use nunique for efficiency
-    else:
-        return {}  # Return empty if no data source
+    
+    # 1. Determine unique IDs and number of colors needed
+    if isinstance(data_source, np.ndarray):  # For mask_path (segmentation masks)
+        # FIX: Get the actual unique labels from the mask array.
+        # This is essential to prevent KeyError when labels are not sequential (e.g., 0, 1, 5, 37).
+        unique_labels = np.unique(data_source)
+        # Filter out label 0 (background) for coloring, unless it's the only one.
+        labels_to_color = unique_labels[unique_labels != 0] if len(unique_labels) > 1 else unique_labels
+        
+        num_colors = max(20, len(labels_to_color))
 
+    elif isinstance(data_source, dict):  # For cells_dict
+        labels_to_color = data_source.keys()
+        num_colors = max(20, len(labels_to_color))
+        
+    elif isinstance(data_source, pd.DataFrame):  # For cells_df
+        # Get unique cell_ids to use as keys
+        labels_to_color = data_source['cell_id'].unique()
+        num_colors = max(20, len(labels_to_color))
+        
+    else:
+        return {}  # Return empty if no valid data source
+
+    # 2. Select Color Map
+    # Use a cyclical color map to handle many labels
     cmap = plt.colormaps['tab20'](np.linspace(0, 1, num_colors))
 
-    if isinstance(data_source, np.ndarray):  # For mask_path
-        color_dict = {j: cmap[j, :3] for j in range(num_colors)} # Corrected range
-    elif isinstance(data_source, dict):  # For cells_dict
-        color_dict = {cell_id: cmap[i, :3] for i, cell_id in enumerate(data_source)}
-    elif isinstance(data_source, pd.DataFrame):  # For cells_df
-        unique_cell_ids = data_source['cell_id'].unique()  # Get unique cell IDs
-        color_dict = {cell_id: cmap[i, :3] for i, cell_id in enumerate(unique_cell_ids)}
+    # 3. Create the Dictionary
+    color_dict = {}
+    
+    # Map each unique label to a unique color from the color map
+    for i, label in enumerate(labels_to_color):
+        # Use the modulo operator to cycle through the available colors (e.g., if there are >20 cells)
+        color_dict[label] = cmap[i % len(cmap), :3]
+
+    # Special handling for mask background (label 0)
+    if isinstance(data_source, np.ndarray) and 0 in unique_labels:
+        # Assign a transparent or neutral color for label 0 (often black [0, 0, 0] or white [1, 1, 1])
+        # Since the `_plot_mask` function uses the color_dict, we need to provide a value for 0.
+        # It's safest to give it a visible (but usually black/white) color here; the alpha blending will handle visibility.
+        color_dict[0] = [0.0, 0.0, 0.0] # Black for background if label 0 exists
 
     return color_dict
 
@@ -201,29 +225,48 @@ def _add_legend(color_dict):
     if legend_patches:
         plt.legend(handles=legend_patches, bbox_to_anchor=(1.05, 1), loc='upper left')
 
-def _show_and_close_plot(fig):
-    plt.show(fig)
-    plt.close(fig)
-
 
 # Main plotting functions
 
 def display_segmentation(path_to_original_stack, mask_path, alpha=0.5, start=0, end=20):
     phase_stack = tifffile.imread(path_to_original_stack)
-    mask_stack = tifffile.imread(mask_path)  # Load mask stack here
+    mask_stack = tifffile.imread(mask_path)  
+    
+    # 1. Determine the number of images to display
     num_images = end - start
+    
+    # 2. Check for bounds and adjust if necessary
+    # Ensure 'end' doesn't exceed the stack length. 
+    # If the user-provided 'end' is out of bounds, use the stack length.
+    if end > mask_stack.shape[0]:
+        end = mask_stack.shape[0]
+        num_images = end - start
+    
+    # 3. Create the figure/axes
     fig, axs = _create_figure_and_axes(phase_stack, num_images)
-    color_dict = _create_color_dict(mask_stack[end])  # Create color dict from mask data
+    
+    # CRITICAL FIX: Create color dict from the entire time range being plotted.
+    # This ensures every unique cell label that appears in frames 'start' to 'end' 
+    # is included in the dictionary, preventing the KeyError.
+    mask_subset = mask_stack[start:end]
+    color_dict = _create_color_dict(mask_subset) 
 
+    # 4. Loop and plot each frame
     for i in range(start, end):
         phase = phase_stack[i]
         mask = mask_stack[i]
-        axs[i - start].imshow(phase, cmap='gray')
-        _plot_mask(axs[i-start], mask, color_dict, alpha)
-        _set_axes_properties(axs[i-start], i)
+        
+        # Determine the correct axis index (since the loop starts at 'start')
+        ax_index = i - start 
+        
+        axs[ax_index].imshow(phase, cmap='gray')
+        _plot_mask(axs[ax_index], mask, color_dict, alpha)
+        _set_axes_properties(axs[ax_index], i)
 
     _add_legend(color_dict)
-    _show_and_close_plot(fig)
+    
+    # 5. Display the plot 
+    plt.show()
 
 def display_cells_from_df(path_to_original_stack, cells_df, start=0, end=20):
     phase_stack = tifffile.imread(path_to_original_stack)
@@ -281,7 +324,7 @@ def display_stack(path_to_original_stack, start=0, end=20):
         axs[i - start].imshow(phase, cmap='gray')
         _set_axes_properties(axs[i - start], i)
 
-    _show_and_close_plot(fig)
+    plt.show()
 
 
 def create_kymograph(phase_stack, start, end, fov_id, peak_id, output_dir):

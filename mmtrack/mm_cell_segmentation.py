@@ -43,7 +43,7 @@ def segment_chnl_stack(path_to_phase_channel_stack,
 											small_merge_area_threshold)
 
 		unstacked_seg_image = unstacked_seg_image.astype("uint8")
-		unstacked_seg_filename = f'mask_{filename}_{time:03d}.tiff'
+		unstacked_seg_filename = f'mask_t_{time:03d}_{filename}'
 		unstacked_path = os.path.join(path_to_mm3_seg, unstacked_seg_filename)
 		tifffile.imwrite(unstacked_path, unstacked_seg_image)
 
@@ -56,7 +56,6 @@ def segment_chnl_stack(path_to_phase_channel_stack,
 	seg_filename = f'mm3_segmented_{filename}'
 	path = os.path.join(save_to_path, seg_filename)
 	tifffile.imwrite(path, segmented_imgs)
-
 
 
 def segment_image(image,
@@ -90,6 +89,7 @@ def segment_image(image,
             return np.zeros_like(image)
 
         markers = morphology.label(labeled, connectivity=1)
+        markers = markers.astype(np.int32)
         if np.amax(markers) == 0:
             return np.zeros_like(image)
 
@@ -97,15 +97,15 @@ def segment_image(image,
         print(f"Error in initial processing: {e}")
         return np.zeros_like(image)
         
-    markers = markers.astype(np.int32)
-
+    
     # 2. Watershed Segmentation
     thresholded_watershed = thresholded
+    image_float = image.astype(np.float64)
     try:
         markers[thresholded_watershed == 0] = -1
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            labeled_image = segmentation.random_walker(-1 * image, markers)
+            labeled_image = segmentation.random_walker(-1 * image_float, markers)
         labeled_image[labeled_image == -1] = 0
     except Exception as e:
         print(f"Error in watershed segmentation: {e}")
