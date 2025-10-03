@@ -40,7 +40,7 @@ We use **Poetry** for dependency management to ensure a reproducible environment
 
 -----
 
-## 2\. Usage and Tutorial (todo: update)
+## 2\. Usage and Tutorial
 
 ## Running Stage 1: Image Correction
 
@@ -53,9 +53,42 @@ Run the script from your project root, replacing the placeholder paths with the 
 ```bash
 # Example: Use default parameters
 poetry run python 01_image_correction.py \
-    --input-dir '<path/to/raw/data/DIMM_CL008_072225>' \
-    --output-dir './processed_images'
+    --input-dir '<path/to/raw/data/DIMM_CL008_072225>' 
 ```
+An interacitve window will pop up with the detected lines used for image rotation, this serves a check for any potenetial downstream troubleshooting if rotation of image does not go as expected.
+
+Close the window to proceed with pipeline.
+
+A second interactive window will pop up with the identified microfluidic channels/trenches that capture cells. Each channel has a label in red at the bottom that needs to be used for analysis in the next step. This image will also be saved as a tif file.
+
+Ultimately the directory fill be structured as such:
+
+<path/to/raw/data>/
+└── <exp_folder>/
+    ├── Pos0/   <--  Directory of FOV contains individual TIFF files for each phase and fluorescent channels and each timepoint
+    ├── Pos1/
+    ├── ...
+    │
+    └── hyperstacked/
+        ├── hyperstacked_xy0.tif
+        ├── hyperstacked_xy1.tif  <--  File is a hyperstack of the entire, unprocessed FOV, including all phase/fluorescent channels and timepoints
+        ├── ...
+        │
+        └── drift_corrected/
+            ├── drift_cor_<experiment>_xy0.tif
+            ├── drift_cor_<experiment>_xy1.tif  <--  File is a hyperstack of the entire, drift-corrected FOV, including all phase/fluorescent channels and timepoints
+            ├── ...
+            │
+            └── rotated/
+                ├── rotated_xy0.tif
+                ├── rotated_xy1.tif  <--  File is a hyperstack of the entire, rotated FOV, including all phase/fluorescent channels and timepoints
+                ├── ...
+                │
+                └── mm_channels/
+                    ├── FOV000_mm_channel_mask.tif  <-- File contains microfluidic channels with IDs needed for processing
+                    ├── FOV001_mm_channel_mask.tif
+                    ├── FOV000_region_01.tif <-- File is a hyperstack of identified microfluidic channels, including all phase/fluorescent channels and timepoints
+                    └── ...
 
 ### User Action and Output
 
@@ -80,7 +113,6 @@ poetry run python 01_image_correction.py --help
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--input-dir` | `str` | *N/A* | **(Required)** Path to the directory containing the raw TIFF stacks. |
-| `--output-dir` | `str` | *N/A* | **(Required)** Base path for saving corrected and processed images. |
 | `--phase-channel-idx` | `int` | `0` | Index of the phase contrast channel (`c` parameter). |
 | `--fast-drift-correction` | `bool` | `True` | Use the fast drift correction method (`fast4`). |
 | `--growth-channel-length` | `int` | `400` | Approx. pixel length for the Mother Machine channel. |
@@ -93,7 +125,6 @@ If your phase channel is index 1 and you are not using the fast drift correction
 ```bash
 poetry run python 01_image_correction.py \
     --input-dir '<path/to/raw/data>' \
-    --output-dir './processed_images' \
     --phase-channel-idx 1 \
     --fast-drift-correction False
 ```

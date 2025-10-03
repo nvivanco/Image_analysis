@@ -210,64 +210,76 @@ def load_mm_channels(input_dir):
 
 
 def extract_mm_channels(path_to_tcyx_FOVs, chan_w=10, chan_sep=45, crop_wp=10, chan_lp=10, chan_snr=1):
-	# create an output directory for microfluidic_channels
-	path_to_mm_channels = os.path.join(path_to_tcyx_FOVs, 'mm_channels')
-	os.makedirs(path_to_mm_channels, exist_ok=True)
+    # create an output directory for microfluidic_channels
+    path_to_mm_channels = os.path.join(path_to_tcyx_FOVs, 'mm_channels')
+    os.makedirs(path_to_mm_channels, exist_ok=True)
 
-	file_group = org_by_timepoint([path_to_tcyx_FOVs])
-	font = ImageFont.truetype('/System/Library/Fonts/ArialHB.ttc', 15)
+    file_group = org_by_timepoint([path_to_tcyx_FOVs])
 
-	for position in file_group.keys():
+    # 1. Get the directory where this script is located
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    # Navigate UP one level to the project root (..), then DOWN to 'fonts'
+    font_path = os.path.join(script_dir, '..', 'fonts', 'Roboto-Regular.ttf')
 
-		file_path = file_group[position]['hyperstacked']['stacked']
-		FOV_stack_tcyx = tifffile.imread(file_path)
-		first_phase_image = FOV_stack_tcyx[0, 0, :, :]
+    try:
+        font = ImageFont.truetype(font_path, 15)
+    except IOError:
+        print(f"Warning: Font not found at {font_path}. Falling back to default.")
+        # Need to ensure ImageFont is imported from PIL
+        font = ImageFont.load_default()
 
-		chnl_loc_dict = find_channel_locs(first_phase_image, chan_w, chan_sep, crop_wp, chan_snr)
-		image_rows = first_phase_image.shape[0]
-		image_cols = first_phase_image.shape[1]
-		print("channels identified in FOV " + position)
-		consensus_mask, mask_corners_dict = make_consensus_mask(chnl_loc_dict, image_rows,
-																image_cols, crop_wp, chan_lp)
-		masked_image = first_phase_image * consensus_mask
-		# Convert to RGB
-		rgb_img = color.gray2rgb(masked_image, channel_axis=-1)
-		# Convert 32 to 8 bit for PIL
-		scaling_factor = 255 / (np.max(rgb_img) - np.min(rgb_img))
-		scaled_img = (rgb_img - np.min(rgb_img)) * scaling_factor
-		scaled_img = scaled_img.astype(np.uint8)
-		# Convert the masked image to PIL format for text overlay
-		pil_image = Image.fromarray(scaled_img)
-		draw = ImageDraw.Draw(pil_image)
-		fov_text = position
-		draw.text((0, 0), text= fov_text, font=font, fill='red')
+    for position in file_group.keys():
 
-		for mm_channel in mask_corners_dict.keys():
-			ch_text = mm_channel.astype(str)
-			x = mask_corners_dict[mm_channel][2]
-			y = mask_corners_dict[mm_channel][1]
-			draw.text((x, y), text=ch_text, font=font, fill='red')
-		final_image = np.array(pil_image)
-		plt.figure()
-		plt.imshow(final_image)
-		plt.title('Channels Identified')
-		plt.axis('off')  # Hide axis labels
-		plt.draw()
+        file_path = file_group[position]['hyperstacked']['stacked']
+        FOV_stack_tcyx = tifffile.imread(file_path)
+        first_phase_image = FOV_stack_tcyx[0, 0, :, :]
 
-		filename = f'FOV{position}_mm_channel_mask.tif'
-		path = os.path.join(path_to_mm_channels, filename)
-		tifffile.imwrite(path, final_image)
+        chnl_loc_dict = find_channel_locs(first_phase_image, chan_w, chan_sep, crop_wp, chan_snr)
+        image_rows = first_phase_image.shape[0]
+        image_cols = first_phase_image.shape[1]
+        print("channels identified in FOV " + position)
+        consensus_mask, mask_corners_dict = make_consensus_mask(chnl_loc_dict, image_rows,
+                                                                image_cols, crop_wp, chan_lp)
+        masked_image = first_phase_image * consensus_mask
+        # Convert to RGB
+        rgb_img = color.gray2rgb(masked_image, channel_axis=-1)
+        # Convert 32 to 8 bit for PIL
+        scaling_factor = 255 / (np.max(rgb_img) - np.min(rgb_img))
+        scaled_img = (rgb_img - np.min(rgb_img)) * scaling_factor
+        scaled_img = scaled_img.astype(np.uint8)
+        # Convert the masked image to PIL format for text overlay
+        pil_image = Image.fromarray(scaled_img)
+        draw = ImageDraw.Draw(pil_image)
+        fov_text = position
+        draw.text((0, 0), text= fov_text, font=font, fill='red')
 
-		print("saving sliced microfluidic channels as tcyx stacks")
-		for trench in mask_corners_dict.keys():
-			y1, y2, x1, x2 = mask_corners_dict[trench]
-			trench_region = FOV_stack_tcyx[:, :, y1:y2, x1:x2]  # assuming image is stacked as tcyx
-			filename = f'FOV{position}_region_{trench}.tif'
-			path = os.path.join(path_to_mm_channels, filename)
-			tifffile.imwrite(path, trench_region)
-	plt.show()
+        for mm_channel in mask_corners_dict.keys():
+            ch_text = str(mm_channel) 
+            x = mask_corners_dict[mm_channel][2]
+            y = mask_corners_dict[mm_channel][1]
+            draw.text((x, y), text=ch_text, font=font, fill='red')
+        final_image = np.array(pil_image)
+        plt.figure()
+        plt.imshow(final_image)
+        plt.title('Channels Identified')
+        plt.axis('off')  # Hide axis labels
+        plt.draw()
 
-	return path_to_mm_channels
+        filename = f'FOV{position}_mm_channel_mask.tif'
+        path = os.path.join(path_to_mm_channels, filename)
+        tifffile.imwrite(path, final_image)
+
+        print("saving sliced microfluidic channels as tcyx stacks")
+        for trench in mask_corners_dict.keys():
+            y1, y2, x1, x2 = mask_corners_dict[trench]
+            trench_region = FOV_stack_tcyx[:, :, y1:y2, x1:x2]  # assuming image is stacked as tcyx
+            filename = f'FOV{position}_region_{trench}.tif'
+            path = os.path.join(path_to_mm_channels, filename)
+            tifffile.imwrite(path, trench_region)
+            
+    plt.show()
+
+    return path_to_mm_channels
 
 
 def make_consensus_mask(chnl_loc_dict, image_rows, image_cols, crop_wp=10, chan_lp=10):
