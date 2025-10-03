@@ -2,7 +2,7 @@
 
 This repository contains the source code for the **DuMM Bacteria Tracker**, a Python package (`mmtrack`) dedicated to highly accurate cell segmentation and lineage tracking for single-cell time-lapse microscopy data, particularly within **Mother Machine** devices.
 
-The cell tracking component utilizes a custom **Graph Neural Network (GNN)** architecture for robust link prediction across time steps. The trained model weights are hosted separately on the [Hugging Face Hub](https://www.google.com/search?q=https://huggingface.co/nvivanco/DuMM_bacteria_track).
+The cell tracking component utilizes a custom **Graph Neural Network (GNN)** architecture for robust link prediction across time steps. The trained model weights are hosted separately on the [Hugging Face Hub](https://huggingface.co/nvivanco/DuMM_bacteria_track).
 
 -----
 
