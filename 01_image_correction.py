@@ -3,19 +3,18 @@ import os
 from mmtrack import pre_process_mm
 
 
-def run_image_correction(input_dir, output_dir, phase_channel_idx,
+def run_image_correction(input_dir, phase_channel_idx,
 						 fast_drift_correction, growth_len, trench_ends_orientation):
 	"""
 	Performs drift correction, image rotation, and channel extraction on raw DuMM TIFF stacks.
 	"""
 	print(f"Starting image pre-processing for raw data at: {input_dir}")
-	os.makedirs(output_dir, exist_ok=True)
 
 	# 1. DRIFT CORRECTION
 	print("\n--- 1. Performing Drift Correction ---")
 	drift_corrected_path = pre_process_mm.drift_correct(
-		dir_files_to_correct=input_dir,
-		experiment_type='DuMM',
+		root_dir=input_dir,
+		experiment_name='DuMM',
 		fast4=fast_drift_correction,
 		c=phase_channel_idx  # Phase channel index
 	)
@@ -38,9 +37,9 @@ def run_image_correction(input_dir, output_dir, phase_channel_idx,
 
 	print("\n Pipeline Stage 1 (Image Correction) Complete.")
 	print("\n\n#################################################################")
-	print("## USER ACTION REQUIRED: Inspect TRENCH MASKS and TIME-LAPSE   ##")
-	print(f"## Next Step: Determine 'empty_stack_id' and 'ana_peak_ids'. ##")
-	print(f"## Use {path_to_mm_channels} as the input for Stage 2.         ##")
+	print("USER ACTION REQUIRED: Inspect TRENCH MASKS and TIME-LAPSE")
+	print("Next Step: Determine 'empty_stack_id' and 'ana_peak_ids'.")
+	print(f"Use {path_to_mm_channels} as the input for Stage 2.")
 	print("#################################################################")
 
 	return path_to_mm_channels
@@ -58,13 +57,6 @@ if __name__ == "__main__":
 		type=str,
 		help="Path to the directory containing the raw TIFF stacks."
 	)
-	parser.add_argument(
-		'--output-dir',
-		required=True,
-		type=str,
-		help="Base path for saving corrected and processed images."
-	)
-
 	# --- Optional Function Parameters (Defaults set here) ---
 	parser.add_argument(
 		'--phase-channel-idx',
@@ -95,7 +87,6 @@ if __name__ == "__main__":
 	args = parser.parse_args()
 	run_image_correction(
 		input_dir=args.input_dir,
-		output_dir=args.output_dir,
 		phase_channel_idx=args.phase_channel_idx,
 		fast_drift_correction=args.fast_drift_correction,
 		growth_len=args.growth_channel_length,

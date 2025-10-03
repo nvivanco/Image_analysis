@@ -520,17 +520,17 @@ def rotate_stack(path_to_stack, c=0, growth_channel_length=400, closed_ends = 'd
 		fov_text = position
 		draw.text((0, 0), text= fov_text, font=font, fill='red')
 		final_image = np.array(pil_image)
-		plt.figure()
-		plt.imshow(final_image, cmap='gray')
-		plt.axis('off')  # Hide axes labels and ticks
-		plt.draw()# Show the plot
+		# plt.figure()
+		# plt.imshow(final_image, cmap='gray')
+		# plt.axis('off')  # Hide axes labels and ticks
+		# plt.draw()# Show the plot
 
 		# Save the rotated and cropped stack
 		new_filename = f'rotated_{filename}'
 		new_path = os.path.join(path_to_rotated_images, new_filename)
 		tifffile.imwrite(new_path, cropped_stack)
 
-	plt.show()
+	#plt.show()
 	print('Successfully rotated stack')
 	return path_to_rotated_images
 
@@ -575,8 +575,9 @@ def hyperstack_tif_tcyx(root_dir, experiment_name, c=0):
 	input_dirs = [str(path) for path in root.glob('**//Pos*') if path.is_dir()]
 
 	# Create output directory if it doesn't exist
-	output_dir_path = os.path.join(root_dir, 'renamed')
-	os.makedirs(output_dir_path, exist_ok=True)
+	# for now don't save renamed files because they take up too much space
+	# output_dir_path = os.path.join(root_dir, 'renamed')
+	# os.makedirs(output_dir_path, exist_ok=True)
 
 	hyperstacked_path = os.path.join(root_dir, 'hyperstacked')
 	os.makedirs(hyperstacked_path, exist_ok=True)
@@ -590,12 +591,13 @@ def hyperstack_tif_tcyx(root_dir, experiment_name, c=0):
 		for time, channels in sorted(time.items()):
 			image_data = []
 			for channel, image_path in sorted(channels.items()):
-				new_filename = f'{experiment_name}_t{time:04.0f}xy{position}c{channel}.tif'
-				new_path = os.path.join(output_dir_path, new_filename)
+				# new_filename = f'{experiment_name}_t{time:04.0f}xy{position}c{channel}.tif'
+				# new_path = os.path.join(output_dir_path, new_filename)
 				try:
 					# Copy the file to the new path
-					shutil.copy(str(image_path), str(new_path))
-					channel_image = tifffile.imread(new_path)
+					# shutil.copy(str(image_path), str(new_path))
+					# channel_image = tifffile.imread(new_path)
+					channel_image = tifffile.imread(image_path)
 					image_data.append(channel_image)
 
 				except OSError as e:
@@ -648,7 +650,8 @@ def drift_correction_f4ds(hyperstacked_path):
     correct_z = False
     correct_center_rotation = False
     crop_output = True
-    export_csv = True
+    export_csv = False
+
     
     for filename in os.listdir(hyperstacked_path):
         if filename.endswith('.tif') or filename.endswith('.tiff'):
@@ -661,33 +664,33 @@ def drift_correction_f4ds(hyperstacked_path):
                 hyperstacked_img = hyperstacked_img.swapaxes(0,1)
                 hyperstacked_img = np.expand_dims(hyperstacked_img, axis = 2)
 
-                tmp_path = str(output_dir_path + '/tmp_data/')
+                # tmp_path = str(output_dir_path + '/tmp_data/')
                 ref_channel = int(ref_channel) # may need to change this 
                 if ref_channel > len(hyperstacked_img[0]):
                     ref_channel = len(hyperstacked_img[0])
 
+                # The data will now remain a Dask array in memory until the final tifffile.imwrite
                 data = da.asarray(hyperstacked_img)
                 data = data.rechunk('auto')
                 new_shape = data.chunksize
-                data = f4ds.write_tmp_data_to_disk(tmp_path, data, new_shape)
-                print('Imge imported')
+                
+				# Don't save temp file for now to save disk space
+                # data = f4ds.write_tmp_data_to_disk(tmp_path, data, new_shape) 
 
                 if correct_xy == True:
                     xy_drift = f4ds.get_xy_drift(data, 0)
                     tmp_data = f4ds.apply_xy_drift(data, xy_drift)
-                    tmp_data = f4ds.write_tmp_data_to_disk(tmp_path, tmp_data, new_shape)
+                    # tmp_data = f4ds.write_tmp_data_to_disk(tmp_path, tmp_data, new_shape)
                 else:
-                    tmp_data = dataxy_drift = np.asarray([0,0])
+                    tmp_data = data
                     xy_drift = np.asarray([0,0])
 
                 if correct_z == True: 
                     # Correct z-drift
-                    z_drift = f4ds.get_z_drift(data, ref_channel)
+                    z_drift = f4ds.get_z_drift(tmp_data, ref_channel)
                     tmp_data = f4ds.apply_z_drift(tmp_data, z_drift)
 
-                    # save intermediate result
-                    tmp_data = f4ds.write_tmp_data_to_disk(tmp_path, tmp_data, new_shape)
-
+                    # tmp_data = f4ds.write_tmp_data_to_disk(tmp_path, tmp_data, new_shape)
                 else: 
                     z_drift = np.asarray([[0,0]])
 
@@ -695,21 +698,23 @@ def drift_correction_f4ds(hyperstacked_path):
                     tmp_data = f4ds.crop_data(tmp_data, xy_drift, z_drift)
                     new_shape = (np.shape(tmp_data)[0],1,np.shape(tmp_data)[-3],np.shape(tmp_data)[-2],np.shape(tmp_data)[-1])
 
-                    # save temp result
-                    crop_path = output_dir_path +"/cropped_tmp_data"
-                    da.to_npy_stack(crop_path,tmp_data, axis = 1)
+                    # for now don't save temp result
+                    # crop_path = output_dir_path +"/cropped_tmp_data"
+                    # da.to_npy_stack(crop_path,tmp_data, axis = 1)
                     
-                    shutil.rmtree(tmp_path)
-                    shutil.move(crop_path, tmp_path)
-                    tmp_data = f4ds.read_tmp_data(tmp_path, new_shape)
+                    # shutil.rmtree(tmp_path)
+                    # shutil.move(crop_path, tmp_path)
+                    # tmp_data = f4ds.read_tmp_data(tmp_path, new_shape) # This line reloads from disk
+                    
+                    # If you also want to stop creating the 'tmp_data' directory:
+                    # shutil.rmtree(tmp_path, ignore_errors=True) # Use this if the directory was created earlier
 
                 if correct_center_rotation == True: 
                     # Correct Rotation 
                     alpha = f4ds.get_rotation(tmp_data, ref_channel)
                     tmp_data = f4ds.apply_alpha_drift(tmp_data, alpha)
                     
-                    # save intermediate result
-                    tmp_data = f4ds.write_tmp_data_to_disk(tmp_path, tmp_data, new_shape)
+                    # tmp_data = f4ds.write_tmp_data_to_disk(tmp_path, tmp_data, new_shape)
                 else:
                     alpha = [0]
 
