@@ -275,6 +275,8 @@ poetry run python 03_cell_segmentation.py \
     --small-merge-area-threshold 50
 ```
 
+This part of the pipeline applies the samme segmentation parameters to all specified experiments in the dictionary. Therefore, all these experiments should have consistent phase exposure settings. If different exposure setting have been applied, it is recommended to apply different segmentations settings to those experiments.
+
 ### 4\. Required User Action
 
 The script automatically displays the segmented output for visual confirmation. After running this stage, you **must visually inspect the segmentation masks** to ensure they correctly identify cell regions before proceeding to the next stage of feature extraction.
@@ -284,11 +286,12 @@ The script automatically displays the segmented output for visual confirmation. 
 
 The script `04_feature_extraction.py` performs the crucial step of converting segmented masks into quantifiable cellular data. It creates kymographs, extracts morphological and intensity features using `skimage.measure.regionprops_table`, and consolidates all results into a single pandas `.pkl` file per experiment.
 
-This stage is designed for maximum automation: if no specific time ranges are provided, it automatically finds all segmented files and uses the full time range of each stack.
+This stage is designed for maximum automation: if no specific time ranges are provided, it automatically finds all experiment directories under a base directory, identifies all available segmented files and uses the full time range of each stack.
+
 
 ### Basic Automated Execution (Recommended)
 
-If you intend to use the entire time-lapse for every segmented trench, simply provide the `--base-dir`. The script will automatically discover all segmented TIFF files (`mm3_segmented*.tif`) and calculate the `start` (0) and `end` (last frame index) for each.
+If you intend to use the entire time-lapse for every segmented trench and analyze all experiment directories under a base directory, simply provide the `--base-dir`. The script will automatically discover all segmented TIFF files (`mm3_segmented*.tif`) and calculate the `start` (0) and `end` (last frame index) for each.
 
 ```bash
 # Example: Full automation mode
@@ -300,9 +303,9 @@ poetry run python 04_feature_extraction.py \
 
 ### Custom Time Range Override
 
-If you need to analyze only a specific time window for a given trench (e.g., excluding frames where a cell was lost or the trench clogged), you can pass the **`--time-range-dict`** as a JSON string.
+If you need to analyze only a specific time window, for a given trench (e.g., excluding frames where a cell was lost or the trench clogged), or only a specific set of experiment directories, you can pass the **`--time-range-dict`** as a JSON string.
 
-Any trench **omitted** from this dictionary will still be processed automatically using the full time range. You can also set the `end` frame to `null` to use a custom `start` frame while still defaulting the `end` to the size of the TIFF file.
+Only experiment directories in this dictionary will be processed. Any trench **omitted** from this dictionary will not be processed. You can also set the `end` frame to `null` to use a custom `start` frame while still defaulting the `end` to the size of the TIFF file.
 
 #### `--time-range-dict` Format
 
