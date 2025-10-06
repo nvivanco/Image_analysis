@@ -417,6 +417,7 @@ def midpoint_distance(line, center):
 def crop_around_central_flow(h_lines, w, h, growth_channel_length=400, threshold=700):
     """
     Crops an image around the central flow channel based on detected horizontal lines.
+    It prioritizes the longest line that is also closest to the image center.
 
     Args:
         h_lines: A list of detected horizontal lines, where each line is represented
@@ -424,49 +425,59 @@ def crop_around_central_flow(h_lines, w, h, growth_channel_length=400, threshold
         w: Width of the image.
         h: Height of the image.
         growth_channel_length: Desired length of the cropped region along the flow channel.
-        threshold: Maximum distance of a line from the image center to be considered.
+        threshold: Maximum vertical distance of a line from the image center to be considered.
 
     Returns:
         A tuple containing the start and end indices for cropping along the vertical axis
         (y-axis) if a suitable line is found, otherwise None.
     """
 
-    center_x, center_y = w // 2, h // 2
-    closest_line = None
-    min_difference = float('inf')
+    center_y = h // 2
+    best_line = None
+    max_length = -1
+    min_center_diff = float('inf')
 
-    if h_lines:
-        y_coordinates = [line[0][1] for line in h_lines]
-        median_y = np.median(y_coordinates)
-
-        # Find the line closest to the median y-coordinate
-        for line in h_lines:
-            y_value = line[0][1]
-            difference = abs(y_value - median_y)
-            if difference < min_difference:
-                min_difference = difference
-                closest_line = line
-
-        # Filter lines based on distance from the center and the threshold
-        # We'll consider the 'closest_line' found earlier as the primary candidate
-        # and then apply the threshold.
-        if closest_line is not None:
-            y_of_closest_line = closest_line[0][1]
-            if abs(y_of_closest_line - center_y) <= threshold:
-                # Determine crop boundaries
-                crop_start = max(y_of_closest_line, 0)
-                crop_end = min(y_of_closest_line + growth_channel_length, h) # Ensure crop_end doesn't exceed image height
-
-                return crop_start, crop_end
-            else:
-                print(f"The closest line (y={y_of_closest_line}) is outside the {threshold} pixel threshold from the center (y={center_y}).")
-                return None
-        else:
-            print("No suitable line found after median selection.")
-            return None
-    else:
+    if not h_lines:
         print("No horizontal lines were detected in the image.")
         return None
+
+    # 1. Iterate and find the best line based on combined criteria
+    for line in h_lines:
+        # line is expected to be [[x1, y1, x2, y2]]
+        x1, y1, x2, y2 = line[0]
+
+        # Calculate line length (horizontal distance)
+        length = abs(x2 - x1)
+        
+        # Calculate distance from the image center (y-axis)
+        center_diff = abs(y1 - center_y)
+
+        # 2. Filter by threshold
+        if center_diff <= threshold:
+            # 3. Prioritize longest line, and use proximity to center as a tie-breaker
+            is_longer = length > max_length
+            is_same_length_but_closer = (length == max_length) and (center_diff < min_center_diff)
+            
+            if is_longer or is_same_length_but_closer:
+                max_length = length
+                min_center_diff = center_diff
+                best_line = line
+
+    # 4. Final crop application
+    if best_line is not None:
+        y_of_best_line = best_line[0][1]
+        
+        # Determine crop boundaries
+        # We start the crop *from* the y-coordinate of the best line found.
+        crop_start = max(y_of_best_line, 0)
+        crop_end = min(y_of_best_line + growth_channel_length, h)
+
+        print(f"Selected line: y={y_of_best_line}, length={max_length}, center_diff={min_center_diff}.")
+        return crop_start, crop_end
+    else:
+        print(f"No suitable line found within the {threshold} pixel vertical threshold of the center (y={center_y}).")
+        return None
+
 
 def rotate_stack(path_to_stack, c=0, growth_channel_length=400, closed_ends = 'down'):
 	"""Rotates and crops a stack of cyx or tcyx format files.
@@ -482,9 +493,11 @@ def rotate_stack(path_to_stack, c=0, growth_channel_length=400, closed_ends = 'd
 
 	"""
 
-	# Create output directory for rotated files
-	font = ImageFont.truetype('/System/Library/Fonts/ArialHB.ttc', 15)
+	current_script_dir = os.path.dirname(os.path.abspath(__file__))
+	font_path = os.path.join(current_script_dir, '..', 'fonts', 'Roboto-Regular.ttf')
+	font = ImageFont.truetype(font_path, 15)
 
+	# Create output directory for rotated files
 	path_to_rotated_images = os.path.join(path_to_stack, 'rotated')
 	os.makedirs(path_to_rotated_images, exist_ok=True)
 
