@@ -6,6 +6,7 @@ import pandas as pd
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+from matplotlib.collections import LineCollection
 from skimage.draw import polygon
 from skimage.measure import find_contours
 
@@ -105,8 +106,9 @@ def plot_kymograph_cells_id(phase_kymograph, fluor_kymograph, full_region_df, fo
     plt.xlabel("Time frames")
     plt.tight_layout()
 
+    plt.show()
+
     plt.savefig(f'{folder}_FOV_{fov_id}_trench_{peak_id}_kymograph.png', dpi=300, bbox_inches='tight')
-    plt.close(fig)
 
 
 def _plot_cell_masks(ax, full_region_df, kymograph_shape, y_coord_col='centroid-0', x_coord_col='centroid-1',
