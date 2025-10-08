@@ -13,7 +13,16 @@ We use **Poetry** for dependency management to ensure a reproducible environment
 ### Prerequisites
 
   * Python **3.11.8**
-  * **Poetry** (install via `pip install poetry`)
+  * **Poetry** 
+  For Linux/macOS (using curl):
+  ```bash
+  curl -sSL https://install.python-poetry.org | python3 - --version 2.2.1
+  ```
+  For Windows (using PowerShell):
+  ```PowerShell
+  (Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | python - --version 2.2.1
+  ```
+
 
 ### Setup Steps
 
