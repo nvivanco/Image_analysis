@@ -27,7 +27,7 @@ For Windows (using PowerShell):
 ```
 If you followed those instructions to install Poetry on **Linux/macOS**, you would typically add the following directory to your shell's `PATH` environment variable:
 
- * Shell Configuration
+### Shell Configuration
 
 You need to add the directory that contains the Poetry executable wrapper.
 
@@ -39,7 +39,7 @@ Add the following line to your shell configuration file (e.g., `~/.bashrc`, `~/.
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-### For Windows (PowerShell)
+ * For Windows (PowerShell)
 
 ```powershell
 $Env:Path += ";$env:APPDATA\Python\Scripts"
