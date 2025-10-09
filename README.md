@@ -13,23 +13,25 @@ We use **Poetry** for dependency management to ensure a reproducible environment
 ### Prerequisites
 
   * Python **3.11.8**
-  * **Poetry** 
+  * Poetry **2.2.1** 
 
-  For Linux/macOS (using curl):
-  ```bash
-  curl -sSL https://install.python-poetry.org | python3 - --version 2.2.1
-  ```
-  For Windows (using PowerShell):
-  ```PowerShell
-  (Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | python - --version 2.2.1
-  ```
+### Poetry Installation
+
+For Linux/macOS (using curl):
+```bash
+curl -sSL https://install.python-poetry.org | python3 - --version 2.2.1
+```
+For Windows (using PowerShell):
+```PowerShell
+(Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | python - --version 2.2.1
+```
 If you followed those instructions to install Poetry on **Linux/macOS**, you would typically add the following directory to your shell's `PATH` environment variable:
 
-## Shell Configuration Update
+ * Shell Configuration
 
 You need to add the directory that contains the Poetry executable wrapper.
 
-### For Linux/macOS (Bash/Zsh)
+ * For Linux/macOS (Bash/Zsh)
 
 Add the following line to your shell configuration file (e.g., `~/.bashrc`, `~/.zshrc`, or `~/.profile`):
 
@@ -37,16 +39,13 @@ Add the following line to your shell configuration file (e.g., `~/.bashrc`, `~/.
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-
 ### For Windows (PowerShell)
-
 
 ```powershell
 $Env:Path += ";$env:APPDATA\Python\Scripts"
 # Or the old location:
 # $Env:Path += ";$env:APPDATA\pypoetry\venv\Scripts"
 ```
------
 
 ### Activating the Changes
 
